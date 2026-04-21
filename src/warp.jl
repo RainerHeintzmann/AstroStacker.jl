@@ -93,11 +93,10 @@ Performs the forward warping of in input bayer mosaic (`bayer_mosaic`) with the 
 * `bayer_pattern`: The order of the pixels in the bayer pattern. Allowed tags are R,G and B.
 
 """
-function drizzle_warp!(result, drizzle_mask, bayer_mosaic, tfm; supersample = 2.0, use_interp=false, bayer_pattern = "RGGB")
+function drizzle_warp!(result, drizzle_mask, bayer_mosaic, inv_tfm; supersample = 2.0, use_interp=false, bayer_pattern = "RGGB")
     bayer_index = get_bayer_index(bayer_pattern)
     sindex_x = (1, 2, 1, 2)
     sindex_y = (1, 1, 2, 2)
-
     for bayer_pix in 1:4
         sx = sindex_x[bayer_pix] # Determines the offsets
         sy = sindex_y[bayer_pix]
@@ -106,7 +105,7 @@ function drizzle_warp!(result, drizzle_mask, bayer_mosaic, tfm; supersample = 2.
         dst_mask_mat = @view drizzle_mask[:, :, bayer_index[bayer_pix]]
         my_src_shift = Translation([sx - 2, sy - 2])
         my_zoom = AffineMap([supersample 0; 0 supersample],[0, 0])
-        tfm_both = compose(my_src_shift, compose(my_zoom, inv(tfm)))
+        tfm_both = compose(my_src_shift, compose(my_zoom, inv(inv_tfm)))
         forward_warp!(dst_mat, dst_mask_mat, src_mat, tfm_both, use_interp=use_interp)
     end 
     return result

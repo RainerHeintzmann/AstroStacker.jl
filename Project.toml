@@ -2,3 +2,16 @@ name = "AstroStacker"
 uuid = "68531b66-5cb7-47ff-b2b4-0e29e8580dbd"
 version = "0.1.0"
 authors = ["RainerHeintzmann <heintzmann@gmail.com>"]
+
+[deps]
+Astroalign = "7f4629bd-323a-4fad-ad42-4ee56350f27f"
+CoordinateTransformations = "150eb455-5306-5404-9cee-2592286d6298"
+ImageTransformations = "02fcd773-0e25-5acc-982a-7f6622650795"
+NDTools = "98581153-e998-4eef-8d0d-5ec2c052313d"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+CoordinateTransformations = "0.6.4"
+ImageTransformations = "0.10.2"
+NDTools = "0.8.1"
+StaticArrays = "1.9.18"

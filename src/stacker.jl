@@ -100,6 +100,29 @@
 # end
 
 """
+    do_drizzle_warp!(drizzle_mask, to_warp, inv_tfm, myaxes, )
+
+an alternative to the `warp` function, to be provided to the alignment function instead of warp.
+
+# Parameters:
+
+- `drizzle_mask`: a mask, collecting which pixel where assigned.
+- `result`: the assigned pixels.
+- `use_interp`: whether to use interpolation (true) or not.
+- `bayer_pattern`: a string of size 4 characters, indicating the order of colors. The default ("RGGB") corresponds to this pattern (starting from the top left corner of `input_stack`):
+- `myaxes`: is ignored.
+"""
+function do_drizzle_warp!(drizzle_mask, drizzle_supersampling, bayer_pattern, use_interp, result, to_warp, inv_tfm, myaxes)
+        isnothing(to_warp) && error("For drizzle you need to provide a drizzle_supersample! and a to_warp input, the Bayer-pattern mosaic input")
+        # drizzle_mask = similar(to_warp, eltype(to_warp), dst_size)
+        drizzle_mask .= 0
+        # result = similar(to_warp, dst_size)
+        result .= 0
+        warped = drizzle_warp!(result, drizzle_mask, to_warp, inv_tfm; use_interp=use_interp, supersample = drizzle_supersampling, bayer_pattern)
+        return warped
+end
+
+"""
     stack_many(input_stack; use_interp = false, use_drizzle=true, drizzle_supersampling = 2.0, min_sigma = 2.0,
                 verbose = true, ref_slice = size(input_stack, 3)÷2 + 1, kwargs...)
 
@@ -132,7 +155,7 @@ Stacks many image frames (`input_stack`) stacked along the 3rd dimension into a 
 For other possible (optional) arguments, see the documentation of `align_frame`.
 """
 function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_supersampling = 2.0, min_sigma = 2.0,
-                verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), kwargs...)
+                verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = "RGGB", kwargs...)
     if (!use_drizzle) 
         drizzle_supersampling = 1
     end 
@@ -150,33 +173,44 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)..., NZ, Nimgs))
     all_params = []
     all_results = similar(input_stack, dst_size)
-    all_masks = similar(input_stack, eltype(all_results), dst_size)
+    all_masks = nothing
     n = 1
-    ref_info = nothing
+    # ref_info = nothing
+
+    final_warp_function = Astroalign.warp;
+
+    # dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)...,3))
+
+    if !isnothing(drizzle_supersampling) && (drizzle_supersampling != 1)
+        all_masks = similar(input_stack, eltype(all_results), dst_size)
+    end
 
     for (src, res_slice, mymask) in zip(eachslice(input_stack; dims = 3), eachslice(all_results, dims = 4), eachslice(all_masks, dims = 4))
         # src_mono = bin_mono(src)[:, :, 1]; # Sum over colors
         src_mono = (use_drizzle) ? (@view src[ref_col[1]:2:end, ref_col[2]:2:end, 1]) : src
-        myres, drizzle_mask, ref_info, params = align_frame(ref_mono, src_mono;
-            use_interp=use_interp, drizzle_supersampling = drizzle_supersampling,
-            to_warp = src,
-            ref_info = ref_info,
-            verbose = verbose,
+
+        if !isnothing(drizzle_supersampling) && (drizzle_supersampling != 1)
+            final_warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes)
+        end
+
+        # ref_info, 
+        myres, params = align_frame(src_mono, ref_mono;
+            # use_interp=use_interp, drizzle_supersampling = drizzle_supersampling,
+            # to_warp = src,
+            # ref_info = ref_info,
+            # verbose = verbose,
+            final_warp_function = final_warp_function,
             kwargs...
         )
 
-        if isempty(ref_info)
-            @warn "ignoring slice $(n)"
-            n += 1
-            continue # Ignore this entry
-        end
+        # if isempty(ref_info)
+        #     @warn "ignoring slice $(n)"
+        #     n += 1
+        #     continue # Ignore this entry
+        # end
 
         push!(all_params, params)
         res_slice .= myres
-
-        if !isnothing(drizzle_mask)
-            mymask .= drizzle_mask
-        end
 
         if (verbose)
             tfm = params[:tfm]
