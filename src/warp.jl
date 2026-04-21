@@ -103,7 +103,7 @@ function drizzle_warp!(result, drizzle_mask, bayer_mosaic, inv_tfm; supersample 
         src_mat = @view bayer_mosaic[sx:2:end, sy:2:end]
         dst_mat = @view result[:,:,bayer_index[bayer_pix]]
         dst_mask_mat = @view drizzle_mask[:, :, bayer_index[bayer_pix]]
-        my_src_shift = Translation([sx - 2, sy - 2])
+        my_src_shift = Translation(sx - 2, sy - 2)
         my_zoom = AffineMap([supersample 0; 0 supersample],[0, 0])
         tfm_both = compose(my_src_shift, compose(my_zoom, inv(inv_tfm)))
         forward_warp!(dst_mat, dst_mask_mat, src_mat, tfm_both, use_interp=use_interp)

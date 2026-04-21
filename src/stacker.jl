@@ -173,7 +173,7 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)..., NZ, Nimgs))
     all_params = []
     all_results = similar(input_stack, dst_size)
-    all_masks = nothing
+    all_masks = zeros(1,1,1,size(input_stack,3)) # just a dummy to have something to iterate
     n = 1
     # ref_info = nothing
 

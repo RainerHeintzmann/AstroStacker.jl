@@ -22,18 +22,12 @@ if (false) # run this code to download the data and store it locally
     run(`tar -xf $(joinpath(mydir, "data.zip"))`)  # works on Windows with tar
 end
 
-folder = "example_data\\"; califolder = folder
-folder = raw"C:\NoBackup\dwarf\Astronomy\DWARF_RAW_TELE_M 35_EXP_15_GAIN_60_2026-02-15-20-07-10-140\\"
-darkfolder = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\dark\cam_0\\"
-flatfolder = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\flat\cam_0\\"
-#     # M 35  open cluster
-#     exposure = "15"
-#     gain = "60"
-#     files = raw"C:\NoBackup\dwarf\Astronomy\DWARF_RAW_TELE_M 35_EXP_15_GAIN_60_2026-02-15-20-07-10-140\M 35_15s60_Astro_20260215-*_16C.fits"
-#     file_stacked = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\flat\cam_0\stacked-16_NGC 2175_15s60_Duo-Band_20260215-202242241.fits"
-#     file_dark = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\dark\cam_0\dark_exp_15.000000_gain_60_bin_1_12C_stack_9.fits"
-#     file_flat = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\flat\cam_0\flat_gain_2_bin_1_ir_*.fits"
-
+folder = "example_data\\"; darkfolder = folder; flatfolder = folder
+if (false) # here you can put your local paths
+        folder = raw"C:\NoBackup\dwarf\Astronomy\DWARF_RAW_TELE_M 35_EXP_15_GAIN_60_2026-02-15-20-07-10-140\\"
+        darkfolder = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\dark\cam_0\\"
+        flatfolder = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\flat\cam_0\\"
+end
 
 file_dark15 = raw"dark_exp_15.000000_gain_60_bin_1_12C_stack_9.fits"
 file_flat = raw"flat_gain_2_bin_1_ir_0.fits"
@@ -42,10 +36,12 @@ files = raw"M 35_15s60_Astro_20260215-*_16C.fits"
 # data = load_series(load, files);
 dark = load(joinpath(darkfolder, file_dark15))
 flat = load(joinpath(flatfolder, file_flat))
+
 curpath = pwd()
 cd(folder) # No idea why Windows cannot deal with the file path?
 data = load_series(load, files);
 cd(curpath)
+
 data = correct_dark_flat(data, dark, flat); # conversion to Float32 seems essential. In Float64 the fits seem to fail! 
 
 box_size = (15, 15)  
@@ -56,8 +52,7 @@ use_interp = true;
 f = AstroStacker.Astroalign.PSF()
 # f = com_psf
 # dist_limit = 2, 
-@time 
-stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
+@time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
         box_size, ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, drizzle_supersampling = 2.0);
 
 all_stars_used, all_shift_x, all_shift_y, all_med_fwhms_x, all_med_fwhms_y, all_rotation = collect_info(all_params_d);
