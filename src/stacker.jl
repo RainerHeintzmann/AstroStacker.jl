@@ -127,9 +127,9 @@ end
                 verbose = true, ref_slice = size(input_stack, 3)÷2 + 1, kwargs...)
 
 Stacks many image frames (`input_stack`) stacked along the 3rd dimension into a single result image.
+Returns a Tuple of the result image and a list of stacking parameters for each image.
 
 # Parameters
-
 * `input_stack`: input stack to align and sum in the stacking operation. This needs to be a bayer-pattern mosaic. This input stack should have the individual images stacked along dimension 3. 
     Internally first a binned version is calculated and then the transformation parameters are used to transform the original data.
 * `use_drizzle`: if `true` the input_stack is interpreted as a bayer pattern and the drizzle algorithm  with the parameter below is applied.

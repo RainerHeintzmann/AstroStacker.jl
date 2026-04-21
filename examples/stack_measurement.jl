@@ -22,16 +22,23 @@ if (false) # run this code to download the data and store it locally
     run(`tar -xf $(joinpath(mydir, "data.zip"))`)  # works on Windows with tar
 end
 
-folder = "example_data\\"; darkfolder = folder; flatfolder = folder
-if (false) # here you can put your local paths
-        folder = raw"C:\NoBackup\dwarf\Astronomy\DWARF_RAW_TELE_M 35_EXP_15_GAIN_60_2026-02-15-20-07-10-140\\"
+if (true) # here you can put your local paths
+        folder = "example_data\\"; darkfolder = folder; flatfolder = folder
+        file_dark15 = raw"dark_exp_15.000000_gain_60_bin_1_12C_stack_9.fits"
+        file_flat = raw"flat_gain_2_bin_1_ir_0.fits"
+        files = raw"M 35_15s60_Astro_20260215-*_16C.fits"
+else
+        #folder = raw"C:\NoBackup\dwarf\Astronomy\DWARF_RAW_TELE_M 35_EXP_15_GAIN_60_2026-02-15-20-07-10-140\\"
+        folder = raw"C:\NoBackup\dwarf\Astronomy\DWARF_RAW_TELE_M 101_EXP_60_GAIN_60_2026-03-22-23-55-44-199\\"
         darkfolder = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\dark\cam_0\\"
         flatfolder = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\flat\cam_0\\"
+        file_dark15 = raw"dark_exp_60.000000_gain_60_bin_1_14C_stack_10.fits"
+        # file_dark15 = raw"dark_exp_15.000000_gain_60_bin_1_12C_stack_9.fits"
+        file_flat = raw"flat_gain_2_bin_1_ir_0.fits"
+        # files = raw"M 35_15s60_Astro_20260215-*_16C.fits"
+        files = raw"M 101_60s60_Astro_20260323-*_14C.fits"
 end
 
-file_dark15 = raw"dark_exp_15.000000_gain_60_bin_1_12C_stack_9.fits"
-file_flat = raw"flat_gain_2_bin_1_ir_0.fits"
-files = raw"M 35_15s60_Astro_20260215-*_16C.fits"
 
 # data = load_series(load, files);
 dark = load(joinpath(darkfolder, file_dark15))
@@ -54,6 +61,10 @@ f = AstroStacker.Astroalign.PSF()
 # dist_limit = 2, 
 @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
         box_size, ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, drizzle_supersampling = 2.0);
+
+# defining a new axis na
+newaxis = [CartesianIndex()]
+# @vt stacked_d[:,:,newaxis,:]
 
 all_stars_used, all_shift_x, all_shift_y, all_med_fwhms_x, all_med_fwhms_y, all_rotation = collect_info(all_params_d);
 plot(all_shift_x, title="Shifts", xlabel="frame #", ylabel="shift / pixel", label="X");plot!(all_shift_y, label="Y")
