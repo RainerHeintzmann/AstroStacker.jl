@@ -73,11 +73,11 @@ end
     This information can be used for plotting
 """
 function collect_info(all_params)
-    all_stars_used = [p.stars_used for p in all_params]
+    all_stars_used = [length(p.inlier_idxs) for p in all_params]
     all_shift_x = [p.tfm.translation[1] for p in all_params]
     all_shift_y = [p.tfm.translation[2] for p in all_params]
     all_rotation = [atan(p.tfm.linear[1,2], p.tfm.linear[1,1]) for p in all_params]
-    all_med_fwhms_x = [p.med_fwhm_x for p in all_params]
-    all_med_fwhms_y = [p.med_fwhm_y for p in all_params]
-    return all_stars_used, all_shift_x, all_shift_y, all_med_fwhms_x, all_med_fwhms_y, all_rotation
+    all_med_fwhms_x = [median_fwhm(p.phot_from,1) for p in all_params]
+    all_med_fwhms_y = [median_fwhm(p.phot_from,2) for p in all_params]
+    return all_stars_used, all_shift_x, all_shift_y, all_rotation, all_med_fwhms_x, all_med_fwhms_y
 end

@@ -122,6 +122,16 @@ function do_drizzle_warp!(drizzle_mask, drizzle_supersampling, bayer_pattern, us
         return warped
 end
 
+function get_mono(data; use_drizzle, ref_col=(2,1), )
+    if (use_drizzle)
+        return @view data[ref_col[1]:2:end, ref_col[2]:2:end]
+    elseif (ndims(data)<3)
+         return data
+    else
+         return @view data[:,:,min(size(data,3),ref_col[1])]
+    end
+end
+
 """
     stack_many(input_stack; use_interp = false, use_drizzle=true, drizzle_supersampling = 2.0, min_sigma = 2.0,
                 verbose = true, ref_slice = size(input_stack, 3)÷2 + 1, kwargs...)
@@ -161,23 +171,23 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     end 
     # Sum over colors (for alignment only)
     # ref_mono = bin_mono(@view input_stack[:, :, ref_slice])[:, :, 1]
-    ref_mono = (use_drizzle) ? (@view input_stack[ref_col[1]:2:end, ref_col[2]:2:end, ref_slice]) : (@view input_stack[:,:,ref_slice])
-
+    # ref_mono = (use_drizzle) ? (@view input_stack[ref_col[1]:2:end, ref_col[2]:2:end, ref_slice]) : (@view input_stack[:,:,ref_slice])
+    ref_mono = get_mono(input_stack[:,:,ref_slice,:]; use_drizzle=use_drizzle, ref_col=ref_col)
     reduced_size = size(ref_mono)[1:2]
 
     Nimgs = size(input_stack, 3)
     NZ = 3
-    if (!use_drizzle)
-        NZ = 1
+    if (!use_drizzle)        
+        NZ = size(input_stack,4)
     end
-    dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)..., NZ, Nimgs))
+    @show dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)..., NZ, Nimgs))
     all_params = []
     all_results = similar(input_stack, dst_size)
     all_masks = zeros(1,1,1,size(input_stack,3)) # just a dummy to have something to iterate
     n = 1
     # ref_info = nothing
 
-    final_warp_function = Astroalign.warp;
+    warp_function = Astroalign.warp;
 
     # dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)...,3))
 
@@ -187,21 +197,22 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
 
     for (src, res_slice, mymask) in zip(eachslice(input_stack; dims = 3), eachslice(all_results, dims = 4), eachslice(all_masks, dims = 4))
         # src_mono = bin_mono(src)[:, :, 1]; # Sum over colors
-        src_mono = (use_drizzle) ? (@view src[ref_col[1]:2:end, ref_col[2]:2:end, 1]) : src
+        # src_mono = (use_drizzle) ? (@view src[ref_col[1]:2:end, ref_col[2]:2:end, 1]) : src
+        src_mono = get_mono(src; use_drizzle=use_drizzle, ref_col=ref_col)
 
         if !isnothing(drizzle_supersampling) && (drizzle_supersampling != 1)
-            final_warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes)
+            warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes)
         end
 
-        # ref_info, 
-        myres, params = align_frame(src_mono, ref_mono;
-            # use_interp=use_interp, drizzle_supersampling = drizzle_supersampling,
-            # to_warp = src,
-            # ref_info = ref_info,
-            # verbose = verbose,
-            final_warp_function = final_warp_function,
-            kwargs...
-        )
+        tfm, params = find_transform(src_mono, ref_mono; kwargs...)
+
+        if (ndims(src) < 3)
+            res_slice .= apply_transform(tfm, src_mono, ref_mono; warp_function = warp_function)
+        else
+            for (src_c, res_c) in zip(eachslice(src; dims = 3), eachslice(res_slice; dims = 3))
+                res_c = apply_transform(tfm, src_c, src_c; warp_function = warp_function)
+            end
+        end
 
         # if isempty(ref_info)
         #     @warn "ignoring slice $(n)"
@@ -209,11 +220,10 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
         #     continue # Ignore this entry
         # end
 
+        params = (params..., tfm = tfm) # store this for later use
         push!(all_params, params)
-        res_slice .= myres
 
         if (verbose)
-            tfm = params[:tfm]
             a = atan(tfm.linear[1, 2], tfm.linear[1, 1]) * 180/pi
             println("stacking: $n, angle: $(round(a; sigdigits = 3)) deg, shift: $(round.(tfm.translation; sigdigits = 4))")
         end
@@ -226,9 +236,16 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
 
     if (min_sigma > 0)
         if (use_drizzle)
-            result = remove_outliers(all_results, all_masks; verbose, stack_dim, min_sigma)
+            result = remove_outliers(all_results, all_masks; verbose=verbose, stack_dim=stack_dim, min_sigma=min_sigma)
         else
-            result = remove_outliers(all_results; verbose, stack_dim, min_sigma)
+            if (size(all_results,4)==1)
+                result = remove_outliers(all_results;verbose=verbose, stack_dim=stack_dim, min_sigma=min_sigma)
+            else
+                result = []
+                for all_c in eachslice(all_results; dims = 3)
+                    push!(result, remove_outliers(all_c; verbose=verbose, stack_dim=stack_dim-1, min_sigma=min_sigma))
+                end
+            end
         end
     else
         divisor = max.(1, sum(all_masks; dims = stack_dim))

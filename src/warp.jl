@@ -1,12 +1,15 @@
 # Helper function. Transforms source coordinates and copies values.
 function warp_assign!(result, weights, src, x,y, tfm, supersample)
-    src_pos = SVector{2}(x,y) # [x, y]
-    # Forward transform source coord to dest coord
-    dest_coord = tfm(src_pos)
+    # src_pos = SVector{2}(x,y) # [x, y]
+    # # Forward transform source coord to dest coord
+    # dest_coord = tfm(src_pos)
 
-    # Map to supersampled grid
-    px = round(Int, dest_coord[1] * supersample)
-    py = round(Int, dest_coord[2] * supersample)
+    # # Map to supersampled grid
+    # px = round(Int, dest_coord[1] * supersample)
+    # py = round(Int, dest_coord[2] * supersample)
+
+    px = round(Int, (tfm.linear[1,1]*x+tfm.linear[1,2]*y+tfm.translation[1]) * supersample)
+    py = round(Int, (tfm.linear[2,1]*x+tfm.linear[2,2]*y+tfm.translation[2]) * supersample)
 
     if checkbounds(Bool, result, px, py)
         @inbounds result[px, py] += src[x, y]
@@ -16,12 +19,14 @@ end
 
 # the same but with linear interpolation
 function warp_assign_interp!(result, weights, src, x,y, tfm, supersample)
-    src_pos = SVector{2}(x,y) # [x, y]
-    # Forward transform source coord to dest coord
-    dest_coord = tfm(src_pos)
-
-    fx = dest_coord[1] * supersample
-    fy = dest_coord[2] * supersample
+    # src_pos = SVector{2}(x,y) # [x, y]
+    # # Forward transform source coord to dest coord
+    # dest_coord = tfm(src_pos)
+    # fx = dest_coord[1] * supersample
+    # fy = dest_coord[2] * supersample
+    
+    fx = (tfm.linear[1,1]*x+tfm.linear[1,2]*y+tfm.translation[1]) * supersample
+    fy = (tfm.linear[2,1]*x+tfm.linear[2,2]*y+tfm.translation[2]) * supersample
     # Map to supersampled grid
     px = floor(Int, fx)
     wx = fx .- px

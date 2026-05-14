@@ -49,33 +49,40 @@ cd(folder) # No idea why Windows cannot deal with the file path?
 data = load_series(load, files);
 cd(curpath)
 
-data = correct_dark_flat(data, dark, flat); # conversion to Float32 seems essential. In Float64 the fits seem to fail! 
+@time data = correct_dark_flat(data, dark, flat); # conversion to Float32 seems essential. In Float64 the fits seem to fail! 
 
 box_size = (15, 15)  
 ap_radius = 0.6 * first(box_size);
 min_fwhm = 1.5
 N_max = 30
 use_interp = true;
-f = AstroStacker.Astroalign.PSF()
-# f = com_psf
-# dist_limit = 2, 
+# f = AstroStacker.Astroalign.PSF()
+f = com_psf
+
 @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
         box_size, ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, drizzle_supersampling = 2.0);
+
+# dist_limit = 2, 
+# using ProfileCanvas
+# ProfileCanvas.@profview stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
+#         box_size, ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, drizzle_supersampling = 2.0)
 
 # defining a new axis na
 newaxis = [CartesianIndex()]
 # @vt stacked_d[:,:,newaxis,:]
+# @vt sum(data, dims=3)
 
-all_stars_used, all_shift_x, all_shift_y, all_med_fwhms_x, all_med_fwhms_y, all_rotation = collect_info(all_params_d);
+# all_med_fwhms_x, all_med_fwhms_y, 
+all_stars_used, all_shift_x, all_shift_y, all_rotation, all_med_fwhms_x, all_med_fwhms_y = collect_info(all_params_d);
 plot(all_shift_x, title="Shifts", xlabel="frame #", ylabel="shift / pixel", label="X");plot!(all_shift_y, label="Y")
 plot(all_med_fwhms_x, title="FWHMs", xlabel="frame #", ylabel="shift / pixel", label="X");plot!(all_med_fwhms_y, label="Y")
 plot(all_rotation .* (180/pi), title="rotation", xlabel="frame #", ylabel="angle / deg", label="X")
 
 single_channel = data[2:2:end, 1:2:end, :];
-@time stacked_s, all_params_s = stack_many(single_channel; use_drizzle=false, dist_limit = 2, f=f, N_max=N_max,
+@time stacked_s, all_params_s = stack_many(single_channel; use_drizzle=false, f=f, N_max=N_max,
         box_size, ap_radius, min_sigma = 1.5, nsigma = 1, min_fwhm = min_fwhm);
 
-all_stars_used, all_shift_x, all_shift_y, all_med_fwhms_x, all_med_fwhms_y, all_rotation = collect_info(all_params_s);
+all_stars_used, all_shift_x, all_shift_y, all_rotation, all_med_fwhms_x, all_med_fwhms_y = collect_info(all_params_s);
 plot(all_shift_x, title="Shifts", xlabel="frame #", ylabel="shift / pixel", label="X");plot!(all_shift_y, label="Y")
 plot(all_med_fwhms_x, title="FWHMs", xlabel="frame #", ylabel="shift / pixel", label="X");plot!(all_med_fwhms_y, label="Y")
 
@@ -87,11 +94,11 @@ plot(prepare_for_display(stacked_d, 0.08))
 # @vt prepare_for_viewer(stacked_d)
 
 # bin first and process the binned color data
-all_binned = Astroalign.bin_rgb(data);
+all_binned = bin_rgb(data);
 box_size = (9, 9)
 ap_radius = 0.6 * first(box_size);
-stacked_c, all_params_c = stack_many(all_binned; dist_limit = 2, 
-        box_size, ap_radius, min_sigma = 2.0, nsigma = 0.5, ref_slice = 1);
+stacked_c, all_params_c = stack_many(all_binned; use_drizzle=false, 
+        f=f, N_max=N_max, box_size, ap_radius, min_sigma = 1.5, nsigma = 1, min_fwhm = min_fwhm);
 
 # @vt prepare_for_viewer(stacked_c)
 plot(prepare_for_display(stacked_c, 0.08)) 
@@ -100,9 +107,27 @@ plot(prepare_for_display(stacked_c, 0.08))
 all_binned_m = Astroalign.bin_mono(data);
 box_size = (9, 9)
 ap_radius = 0.6 * first(box_size);
-stacked_m, all_param_m = stack_many(all_binned_m; dist_limit = 2, 
-        box_size, ap_radius, min_sigma = 2.0, nsigma = 0.5, ref_slice = 1);
+stacked_m, all_param_m = stack_many(all_binned_m;  f=f, N_max=N_max,
+        box_size, ap_radius, min_sigma = 1.5, nsigma = 1, min_fwhm = min_fwhm);
 
 plot(prepare_for_display(cat(stacked_m,stacked_m,stacked_m, dims=3), 0.08)) 
 # heatmap(sqrt.(clamp.(stacked_m[:,:,1,1], 200, 250)))
 @vt prepare_for_viewer(stacked_m)
+
+
+
+##### speed improvements
+using ImageFiltering
+data = rand(2048, 2048)
+box_size = (7, 7)
+@time data_max = mapwindow(maximum, data, box_size, border = Fill(zero(eltype(data))))
+
+using Photometry
+using TypedTables
+
+using BenchmarkTools
+pm = PeakMesh(box_size, 3.0)
+@btime s =  extract_sources($pm, $data); #  384 ms
+# @btime sm =  extract_sources3($pm, $data); # 58 ms
+
+
