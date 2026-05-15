@@ -1,104 +1,3 @@
-# """
-#     stack_many(img_stack; verbose = true, ref_slice = size(img_stack,3)÷2+1, min_sigma=2.0, kwargs...)
-
-# Stacks many image frames (`img_stack`) stacked along the 3rd dimension into a single result image.
-
-# # Parameters
-
-# * `img_stack`: input stack to align and sum in the stacking operation. This input stack should have the individual images stacked along dimension 3. It can have multiple colors, stacked along the 4th dimension.
-# * `verbose`: prints diagnostic output, if `true`. (default: `true`)
-# * `ref_slice`: an integer indicating the slice to use as a reference image. (default: middle of the stack to minimize field rotation effects).
-# * `min_sigma`: minimum number of standard deviations a single pixel needs to be away from the mean of that pixel to be excluded. 
-#                If this number is set to zero, the outlier-exclusion algorithm will not be run.
-
-# For other (optional) arguments, see the documentation of `align_frame`.
-
-# # Example
-
-# ```julia
-# using IndexFunArrays # For gaussian blob generation
-
-# # Create Initial star coordinates
-# sz = (100,100); mid_pos = [sz...] ./ 2
-# N = 60
-# star_pos = sz .* rand(2,N)
-# star_amp = rand(N)
-# star_shape = (0.3 .+ rand(2, N))
-
-# # Create star image
-# y1 = gaussian(sz; offset = star_pos, weight = star_amp, sigma = star_shape)
-# rot_mat(alpha) = [cos(alpha) sin(alpha); -sin(alpha) cos(alpha)]
-
-# # Rotate the stars by random angles
-# frames = []
-# coords = []
-# N = 10
-
-# for alpha in 33*rand(N)
-#     shift_vec = 10.0 .* (rand(2).-0.5)
-#     new_pos = rot_mat(alpha * pi/180) * (star_pos .- mid_pos) .+ mid_pos .+ shift_vec
-#     frame = gaussian(sz; offset = new_pos, weight = star_amp, sigma = star_shape);
-#     push!(frames, frame); push!(coords, new_pos)
-# end
-
-# frames = cat(frames...; dims=3)
-# ```
-# """
-# function stack_many(img_stack; verbose = true, ref_slice = size(img_stack,3)÷2 + 1, min_sigma = 2.0, kwargs...)
-#     num_cols = size(img_stack, 4)
-#     Nimgs = size(img_stack, 3)
-#     dst_size = (size(img_stack)[1:2]..., num_cols, Nimgs)
-#     all_params = []
-#     all_results = similar(img_stack, dst_size)
-#     all_results .= 0
-
-#     # Keep the alignment images in mono
-#     # Do NOT use a @view in the line below, as this leads to errors!
-#     ref_img = sum(img_stack[:, :, ref_slice:ref_slice, :]; dims = 4)[:, :, 1, 1]
-#     # ref_img = @view img_stack[:,:,ref_slice,:]
-#     ref_info = nothing
-#     n=1
-
-#     for (src_color, res_slice) in zip(eachslice(img_stack; dims = 3), eachslice(all_results; dims = 4))
-#         # sum over colors. Note that eachslice removes dimension 3
-#         src_mono = sum(src_color; dims = 3)[:, :, 1, 1]
-#         myres, _, ref_info, params = align_frame(ref_img, src_mono; to_warp = src_color, kwargs...)
-
-#         if isempty(ref_info)
-#             @warn "ignoring slice $(n)"
-#             n += 1
-#             continue # ignore this entry
-#         end
-
-#         push!(all_params, params)
-#         res_slice .= myres
-
-#         if (verbose)
-#             tfm = params[:tfm]
-#             a = atan(tfm.linear[1,2], tfm.linear[1,1]) * 180/pi
-#             println("stacking frame $n, angle: $a deg, shift: $(tfm.translation)")
-#         end
-
-#         n += 1
-#     end
-
-#     result = nothing
-#     stack_dim = 4
-
-#     if (min_sigma > 0)
-#         # @show size(all_results)
-#         # @show min_sigma
-#         result = remove_outliers(all_results; verbose, stack_dim, min_sigma)
-#     else
-#         all_masks = .!isnan.(all_results)
-#         # Eliminate the NaNs
-#         all_results[.!all_masks] .= 0
-#         result = sum(all_results; dims=stack_dim) ./ max.(1, sum(all_masks; dims = stack_dim))
-#     end
-
-#     return result, all_params
-# end
-
 """
     do_drizzle_warp!(drizzle_mask, to_warp, inv_tfm, myaxes, )
 
@@ -122,13 +21,13 @@ function do_drizzle_warp!(drizzle_mask, drizzle_supersampling, bayer_pattern, us
         return warped
 end
 
-function get_mono(data; use_drizzle, ref_col=(2,1), )
+function get_mono(data; use_drizzle, ref_col=(2,1), dim_color = 4)
     if (use_drizzle)
         return @view data[ref_col[1]:2:end, ref_col[2]:2:end]
     elseif (ndims(data)<3)
          return data
     else
-         return @view data[:,:,min(size(data,3),ref_col[1])]
+         return @view data[:,:,min(size(data,dim_color),ref_col[1])]
     end
 end
 
@@ -175,15 +74,17 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     ref_mono = get_mono(input_stack[:,:,ref_slice,:]; use_drizzle=use_drizzle, ref_col=ref_col)
     reduced_size = size(ref_mono)[1:2]
 
-    Nimgs = size(input_stack, 3)
-    NZ = 3
+    dim_color = 4 # see alsot the calculation of the destination size below
+    dim_stack = 3
+    Nimgs = size(input_stack, dim_stack)
+    Ncol = 3
     if (!use_drizzle)        
-        NZ = size(input_stack,4)
+        Ncol = size(input_stack, dim_color)
     end
-    @show dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)..., NZ, Nimgs))
+    @show dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)..., Nimgs, Ncol))
     all_params = []
     all_results = similar(input_stack, dst_size)
-    all_masks = zeros(1,1,1,size(input_stack,3)) # just a dummy to have something to iterate
+    all_masks = zeros(1,1,size(input_stack, dim_stack),1) # just a dummy to have something to iterate
     n = 1
     # ref_info = nothing
 
@@ -195,7 +96,7 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
         all_masks = similar(input_stack, eltype(all_results), dst_size)
     end
 
-    for (src, res_slice, mymask) in zip(eachslice(input_stack; dims = 3), eachslice(all_results, dims = 4), eachslice(all_masks, dims = 4))
+    for (src, res_slice, mymask) in zip(eachslice(input_stack; dims = dim_stack), eachslice(all_results, dims = dim_stack), eachslice(all_masks, dims = dim_stack))
         # src_mono = bin_mono(src)[:, :, 1]; # Sum over colors
         # src_mono = (use_drizzle) ? (@view src[ref_col[1]:2:end, ref_col[2]:2:end, 1]) : src
         src_mono = get_mono(src; use_drizzle=use_drizzle, ref_col=ref_col)
@@ -209,8 +110,8 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
         if (ndims(src) < 3)
             res_slice .= apply_transform(tfm, src_mono, ref_mono; warp_function = warp_function)
         else
-            for (src_c, res_c) in zip(eachslice(src; dims = 3), eachslice(res_slice; dims = 3))
-                res_c = apply_transform(tfm, src_c, src_c; warp_function = warp_function)
+            for (src_c, res_c) in zip(eachslice(src; dims = ndims(src)), eachslice(res_slice; dims = ndims(src)))
+                res_c .= apply_transform(tfm, src_c, src_c; warp_function = warp_function)
             end
         end
 
@@ -232,24 +133,26 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     end
 
     result = nothing # Since it is returned
-    stack_dim = 4
 
     if (min_sigma > 0)
         if (use_drizzle)
-            result = remove_outliers(all_results, all_masks; verbose=verbose, stack_dim=stack_dim, min_sigma=min_sigma)
+            @show size(all_results)
+            @show size(all_masks)
+            result = remove_outliers(all_results, all_masks; verbose=verbose, stack_dim=dim_stack, min_sigma=min_sigma)
         else
-            if (size(all_results,4)==1)
-                result = remove_outliers(all_results;verbose=verbose, stack_dim=stack_dim, min_sigma=min_sigma)
+            if (size(all_results,dim_color)==1)
+                result = remove_outliers(all_results;verbose=verbose, stack_dim=dim_stack, min_sigma=min_sigma)
             else
-                result = []
-                for all_c in eachslice(all_results; dims = 3)
-                    push!(result, remove_outliers(all_c; verbose=verbose, stack_dim=stack_dim-1, min_sigma=min_sigma))
+                res_size = ntuple(n -> (n==dim_stack) ? 1 : size(all_results, n), ndims(all_results))
+                result = similar(all_results, res_size)
+                for (all_c, res_c) in zip(eachslice(all_results; dims = dim_color),eachslice(result; dims = dim_color))
+                    res_c .= remove_outliers(all_c; verbose=verbose, stack_dim=dim_stack, min_sigma=min_sigma)
                 end
             end
         end
     else
-        divisor = max.(1, sum(all_masks; dims = stack_dim))
-        result = sum(all_results, dims = stack_dim) ./ divisor
+        divisor = max.(1, sum(all_masks; dims = dim_stack))
+        result = sum(all_results, dims = dim_stack) ./ divisor
     end
 
     # Normalize drizzle result
@@ -264,7 +167,7 @@ function remove_outliers(all_results; kwargs...)
     return remove_outliers(all_results, all_masks; kwargs...)
 end
 
-function remove_outliers(all_results, all_masks; verbose = true, stack_dim = 4, min_sigma = 2.0)
+function remove_outliers(all_results, all_masks; verbose = true, stack_dim = 3, min_sigma = 2.0)
         verbose && println("... summing results")
         divisor = max.(eltype(all_results)(1f-8), sum(all_masks; dims = stack_dim))
         result = sum(all_results; dims = stack_dim) ./ divisor
@@ -272,9 +175,13 @@ function remove_outliers(all_results, all_masks; verbose = true, stack_dim = 4, 
         verbose && println("... removing outliers")
         stddev_map = weighted_std(all_results, all_masks; dims = stack_dim)
         n=1
+        # remove the stack_dim from the result and stddev_map 
+        crunched_dims = ntuple(n->(n!=stack_dim) ? (:) : 1, 4)
+        res_view = @view result[crunched_dims...]
+        stddev_view = @view stddev_map[crunched_dims...]
         for (mask, masked_res) in zip(eachslice(all_masks; dims = stack_dim), eachslice(all_results; dims = stack_dim))
             # outliers = (all_masks .!= 0) .&& abs.(masked_res .- result) .> min_sigma .* weighted_std(masked_res, all_masks; dims = stack_dim)
-            outliers = (mask .!= 0) .&& abs.(masked_res .- result.*mask) .> min_sigma .* stddev_map
+            outliers = (mask .!= 0) .&& abs.(masked_res .- res_view .* mask) .> min_sigma .* stddev_view
             verbose && println("frame $(n) outliers found: $(sum(outliers)), $(round(100*sum(outliers)/length(outliers); sigdigits=3)) %")
             masked_res[outliers] .= 0
             mask[outliers] .= 0

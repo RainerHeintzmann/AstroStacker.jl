@@ -59,8 +59,10 @@ use_interp = true;
 # f = AstroStacker.Astroalign.PSF()
 f = com_psf
 
+# ----- stack color camera images which follow a bayer pattern "RGGB" -------
+bayer_pattern = "RGGB"
 @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
-        box_size, ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, drizzle_supersampling = 2.0);
+        box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0);
 
 # dist_limit = 2, 
 # using ProfileCanvas
@@ -68,9 +70,9 @@ f = com_psf
 #         box_size, ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, drizzle_supersampling = 2.0)
 
 # defining a new axis na
-newaxis = [CartesianIndex()]
-# @vt stacked_d[:,:,newaxis,:]
-# @vt sum(data, dims=3)
+# newaxis = [CartesianIndex()]
+# @vt stacked_d # [:,:,newaxis,:]
+# @vt sum(data, dims=4)
 
 # all_med_fwhms_x, all_med_fwhms_y, 
 all_stars_used, all_shift_x, all_shift_y, all_rotation, all_med_fwhms_x, all_med_fwhms_y = collect_info(all_params_d);
@@ -78,6 +80,13 @@ plot(all_shift_x, title="Shifts", xlabel="frame #", ylabel="shift / pixel", labe
 plot(all_med_fwhms_x, title="FWHMs", xlabel="frame #", ylabel="shift / pixel", label="X");plot!(all_med_fwhms_y, label="Y")
 plot(all_rotation .* (180/pi), title="rotation", xlabel="frame #", ylabel="angle / deg", label="X")
 
+prepare_for_viewer(v) = sqrt.(max.(0, v .- median(v, dims=(1,2)))[:,:,1,:]) #reshape( (size(v)[1:2]...,1,size(v,3))
+prepare_for_display(v, m=1.0) = m .*colorview(RGB, permutedims(prepare_for_viewer(v), (3,2,1)))
+mono_for_display(v, m=1.0) = m .*Gray.(permutedims(prepare_for_viewer(v)[:,:,1], (2,1)))
+plot(prepare_for_display(stacked_d, 0.08)) 
+# @vt prepare_for_viewer(stacked_d)
+
+# --------- Now let's stack a monochromatic single channel only -------------
 single_channel = data[2:2:end, 1:2:end, :];
 @time stacked_s, all_params_s = stack_many(single_channel; use_drizzle=false, f=f, N_max=N_max,
         box_size, ap_radius, min_sigma = 1.5, nsigma = 1, min_fwhm = min_fwhm);
@@ -86,19 +95,18 @@ all_stars_used, all_shift_x, all_shift_y, all_rotation, all_med_fwhms_x, all_med
 plot(all_shift_x, title="Shifts", xlabel="frame #", ylabel="shift / pixel", label="X");plot!(all_shift_y, label="Y")
 plot(all_med_fwhms_x, title="FWHMs", xlabel="frame #", ylabel="shift / pixel", label="X");plot!(all_med_fwhms_y, label="Y")
 
-prepare_for_viewer(v) = sqrt.(max.(0, reshape(v .- median(v, dims=(1,2)), (size(v)[1:2]...,1,size(v,3)))))
-prepare_for_display(v, m=10.0) = m .*colorview(RGB,permutedims(prepare_for_viewer(v), (4, 2, 1, 3))[:,:,:,1])
+# prepare_for_display(v, m=10.0) = m .*colorview(RGB,permutedims(prepare_for_viewer(v), (4, 2, 1, 3))[:,:,:,1])
 # display the result as an RGB image
+plot(mono_for_display(stacked_s, 0.08)) 
 
-plot(prepare_for_display(stacked_d, 0.08)) 
-# @vt prepare_for_viewer(stacked_d)
 
+# -------- and now a color image, which is already de-bayered ------------
 # bin first and process the binned color data
-all_binned = bin_rgb(data);
+all_color = bin_rgb(data); # color is in the 4th dimension
 box_size = (9, 9)
 ap_radius = 0.6 * first(box_size);
-stacked_c, all_params_c = stack_many(all_binned; use_drizzle=false, 
-        f=f, N_max=N_max, box_size, ap_radius, min_sigma = 1.5, nsigma = 1, min_fwhm = min_fwhm);
+stacked_c, all_params_c = stack_many(all_color; use_drizzle=false, 
+        f=f, N_max=N_max, box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm);
 
 # @vt prepare_for_viewer(stacked_c)
 plot(prepare_for_display(stacked_c, 0.08)) 
@@ -108,7 +116,7 @@ all_binned_m = Astroalign.bin_mono(data);
 box_size = (9, 9)
 ap_radius = 0.6 * first(box_size);
 stacked_m, all_param_m = stack_many(all_binned_m;  f=f, N_max=N_max,
-        box_size, ap_radius, min_sigma = 1.5, nsigma = 1, min_fwhm = min_fwhm);
+        f=f, N_max=N_max, box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm);
 
 plot(prepare_for_display(cat(stacked_m,stacked_m,stacked_m, dims=3), 0.08)) 
 # heatmap(sqrt.(clamp.(stacked_m[:,:,1,1], 200, 250)))
