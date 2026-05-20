@@ -81,7 +81,7 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     if (!use_drizzle)        
         Ncol = size(input_stack, dim_color)
     end
-    @show dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)..., Nimgs, Ncol))
+    dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)..., Nimgs, Ncol))
     all_params = []
     all_results = similar(input_stack, dst_size)
     all_masks = zeros(1,1,size(input_stack, dim_stack),1) # just a dummy to have something to iterate
@@ -96,6 +96,7 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
         all_masks = similar(input_stack, eltype(all_results), dst_size)
     end
 
+    myref_mono = ref_mono; # changes to the extracted coordinates after the firt run
     for (src, res_slice, mymask) in zip(eachslice(input_stack; dims = dim_stack), eachslice(all_results, dims = dim_stack), eachslice(all_masks, dims = dim_stack))
         # src_mono = bin_mono(src)[:, :, 1]; # Sum over colors
         # src_mono = (use_drizzle) ? (@view src[ref_col[1]:2:end, ref_col[2]:2:end, 1]) : src
@@ -105,7 +106,8 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
             warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes)
         end
 
-        tfm, params = find_transform(src_mono, ref_mono; kwargs...)
+        tfm, params = find_transform(src_mono, myref_mono; kwargs...)
+        myref_mono = params.phot_to # to speed up further rounds, sinc find_transform then ignores the photometry
 
         if (ndims(src) < 3)
             res_slice .= apply_transform(tfm, src_mono, ref_mono; warp_function = warp_function)
@@ -136,8 +138,6 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
 
     if (min_sigma > 0)
         if (use_drizzle)
-            @show size(all_results)
-            @show size(all_masks)
             result = remove_outliers(all_results, all_masks; verbose=verbose, stack_dim=dim_stack, min_sigma=min_sigma)
         else
             if (size(all_results,dim_color)==1)
