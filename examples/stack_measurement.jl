@@ -178,13 +178,13 @@ function main()
         plot(prepare_for_display(stacked_c, 0.08)) 
 
         # bin and sum colors first and process the binned monochrome data
-        all_binned_m = Astroalign.bin_mono(data);
+        all_binned_m = bin_mono(data)[:,:,:,1];
         box_size = (9, 9)
         ap_radius = 0.6 * first(box_size);
-        stacked_m, all_param_m = stack_many(all_binned_m;  f=f, N_max=N_max,
-                f=f, N_max=N_max, box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm);
+        @time stacked_m, all_params_m = stack_many(all_binned_m; use_drizzle=false, f=f, N_max=N_max,
+                box_size, ap_radius, min_sigma = 1.5, nsigma = 1, min_fwhm = min_fwhm);
 
-        plot(prepare_for_display(cat(stacked_m,stacked_m,stacked_m, dims=3), 0.08)) 
+        plot(mono_for_display(stacked_m, 0.08)) 
         # heatmap(sqrt.(clamp.(stacked_m[:,:,1,1], 200, 250)))
         @vt prepare_for_viewer(stacked_m)
 end
