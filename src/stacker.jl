@@ -60,8 +60,9 @@ Returns a Tuple of the result image and a list of stacking parameters for each i
     R G R G
     G B R B 
     ```
+* `box_size`: the box size to use for identifying stars. You should try (15,15), which is not the default.
 
-For other possible (optional) arguments, see the documentation of `align_frame`.
+For other possible (optional) arguments, see the documentation of `align_frames` in the `Astroalign` package.
 """
 function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_supersampling = 2.0, min_sigma = 2.0,
                 verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = "RGGB", kwargs...)

@@ -30,7 +30,7 @@ Random.seed!(42)
     frames = cat(frames..., dims=3)
     # @vt frames # visualize all frames as a 3d stack
     # align the first frame in the stack to the reference image
-    y2_aligned, params = align_frame(frames[:,:,1], y1);
+    y2_aligned = Astroalign.align_frames([frames[:,:,1]], y1)[1];
     # @vt y1 y2_aligned # display alignment (toggle between frames using the keys `,` and `.`)
     # check alignment by summing at the origninal source positions and the destinatoin positions
     y2_aligned[isnan.(y2_aligned)] .= 0
@@ -41,7 +41,7 @@ Random.seed!(42)
     @test sum_at_true / sum_at_source > 8
     # stack all frames in the stack to the coordinates of the first frame
     f = com_psf;
-    stacked, all_params = stack_many(frames; ref_slice=1, f=f, use_drizzle=false, verbose=false);
+    stacked, all_params = stack_many(frames; ref_slice=1, f=f, use_drizzle=false, verbose=false, box_size= (15,15));
     @test size(stacked) == (100, 100, 1, 1)
     # @vt res
     sum_at_true = sum(sum.([stacked[c...] for c in eachslice(y2_coords, dims=2)]))

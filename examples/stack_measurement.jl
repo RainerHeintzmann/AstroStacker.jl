@@ -186,7 +186,7 @@ function main()
 
         plot(mono_for_display(stacked_m, 0.08)) 
         # heatmap(sqrt.(clamp.(stacked_m[:,:,1,1], 200, 250)))
-        @vt prepare_for_viewer(stacked_m)
+        # @vt prepare_for_viewer(stacked_m)
 end
 
 function better_speed()
