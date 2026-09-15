@@ -95,10 +95,10 @@ function main()
         # data = load_series(load, files);
 
         # Load master dark frame (averaged dark current subtraction reference)
-        dark = load(joinpath(darkfolder, file_dark15))
+        dark = load(joinpath(darkfolder, file_dark15));
 
         # Load flat field (dust motes and vignetting correction reference)
-        flat = load(joinpath(flatfolder, file_flat))
+        flat = load(joinpath(flatfolder, file_flat));
 
         # Workaround for Windows path handling issues with FITS loading
         # Save current directory, change to data folder, load images, restore
@@ -109,7 +109,7 @@ function main()
 
         # Apply dark subtraction and flat field division to all images
         # Note: Conversion to Float32 is required - Float64 causes FITS loading issues
-        @time data = correct_dark_flat(data, dark, flat)
+        @time data = correct_dark_flat(data, dark, flat);
 
         # -----------------------------------------------------------------------------
         # STACKING PARAMETERS CONFIGURATION
