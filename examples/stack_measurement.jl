@@ -21,6 +21,7 @@ using NDTools: select_region    # N-dimensional array tools
 using AstroImages           # FITS file format support
 using FileIO                # Generic file loading interface
 using MultifileArrays: load_series  # Load image series from files
+using CUDA
 
 # -----------------------------------------------------------------------------
 # DATA DOWNLOAD SECTION
@@ -127,6 +128,13 @@ function main()
 
         # ----- stack color camera images which follow a bayer pattern "RGGB" -------
         bayer_pattern = "RGGB"
+        use_cuda = true
+        if use_cuda
+                data = cu(data)
+        else
+                data = Array(data)
+        end
+
         @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
                 box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0);
 
