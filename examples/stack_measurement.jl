@@ -184,9 +184,33 @@ function main()
         @time stacked_m, all_params_m = stack_many(all_binned_m; use_drizzle=false, f=f, N_max=N_max,
                 box_size, ap_radius, min_sigma = 1.5, nsigma = 1, min_fwhm = min_fwhm);
 
-        plot(mono_for_display(stacked_m, 0.08)) 
+        plot(mono_for_display(stacked_m, 0.08))
         # heatmap(sqrt.(clamp.(stacked_m[:,:,1,1], 200, 250)))
         # @vt prepare_for_viewer(stacked_m)
+
+        # -------- patch/TPS "lucky imaging" stacking (e.g. for Moon/planetary series) -----------
+        # Unlike stack_many above, this does not assume a single global affine transform per frame:
+        # it registers frames patch-wise via a thin-plate-spline deformation field (FindShift.jl) and
+        # then blends frames with a per-pixel weight derived from a local (Laplacian-variance) sharpness
+        # map, so that whichever frame is locally sharpest dominates the result at each location.
+        all_binned_m = bin_mono(data)[:,:,:,1];
+        @time lucky = stack_many_lucky(all_binned_m; grid_size=(10,10));
+        # try `shift_fun=AstroStacker.FindShift.find_shift_lk` (Lucas-Kanade) instead of the default FFT-based estimator:
+        # @time lucky_lk = stack_many_lucky(all_binned_m; grid_size=(10,10), shift_fun=AstroStacker.FindShift.find_shift_lk);
+
+        # -------- fast, translation-only FFT stacking (no local/TPS correction, no quality blending) ---
+        # Much cheaper than stack_many_lucky above: useful for a quick preview, or when frames only
+        # jitter (no rotation/scale, no spatially-varying local distortion) so a single global shift
+        # per frame is enough. Also useful to build a more stable reference frame for stack_many_lucky
+        # than a single raw input frame.
+        @time fft_stacked = stack_many_fft(all_binned_m);
+        plot(mono_for_display(reshape(fft_stacked.result, size(fft_stacked.result)...,1,1), 0.08))
+
+        plot(mono_for_display(reshape(lucky.result, size(lucky.result)...,1,1), 0.08))
+        # per-frame mean patch quality, to spot outlier (badly-seeing-affected) frames
+        plot([mean(q) for q in lucky.quality], title="mean patch quality", xlabel="frame #", ylabel="Laplacian variance")
+        # deformation field of one frame, to sanity-check the registration (should look smooth, no wild jumps)
+        # @vt lucky.warps[1] .- collect(Tuple.(CartesianIndices(size(all_binned_m)[1:2])))
 end
 
 function better_speed()

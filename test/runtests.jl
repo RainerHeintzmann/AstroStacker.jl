@@ -7,3 +7,5 @@ using Test
 # runtests(Astroalign, args; testsuite, init_code)
 
 include("test-stacker.jl")
+include("test-lucky-stack.jl")
+include("test-fft-stack.jl")

@@ -176,8 +176,8 @@ function remove_outliers(all_results, all_masks; verbose = true, stack_dim = 3, 
         verbose && println("... removing outliers")
         stddev_map = weighted_std(all_results, all_masks; dims = stack_dim)
         n=1
-        # remove the stack_dim from the result and stddev_map 
-        crunched_dims = ntuple(n->(n!=stack_dim) ? (:) : 1, 4)
+        # remove the stack_dim from the result and stddev_map
+        crunched_dims = ntuple(n->(n!=stack_dim) ? (:) : 1, ndims(all_results))
         res_view = @view result[crunched_dims...]
         stddev_view = @view stddev_map[crunched_dims...]
         for (mask, masked_res) in zip(eachslice(all_masks; dims = stack_dim), eachslice(all_results; dims = stack_dim))
