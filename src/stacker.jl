@@ -32,15 +32,23 @@ Returns a Tuple of the result image and a list of stacking parameters for each i
 For other possible (optional) arguments, see the documentation of `align_frames` in the `Astroalign` package.
 
 # GPU usage
-`input_stack` may be a GPU array (e.g. a `CuArray`, with the corresponding GPU package loaded by the
-caller). Star detection (used to determine each frame's alignment) is inherently CPU-bound (it goes
-through `Astroalign`/`Photometry.jl`) and is transparently run on a small, separately-materialized CPU
-copy of the relevant reference/frame data; `input_stack` itself is left untouched on whatever device it
-lives on. The drizzle/forward-warp accumulation (the actual per-pixel-expensive part of stacking) runs
-via `KernelAbstractions.jl` kernels and therefore executes on that same device.
+`input_stack` is normally kept in "slow" memory (a plain CPU `Array`, or even a lazy/disk-backed array
+such as `MultifileArrays.jl`'s `MultifileArray`, which reads a frame from disk only when it's touched) --
+`all_results`/`all_masks` are allocated via `similar(input_stack, ...)` and so automatically inherit that
+same slow storage. Star detection (used to determine each frame's alignment) is inherently CPU-bound (it
+goes through `Astroalign`/`Photometry.jl`) and is transparently run on a small, separately-materialized
+CPU copy of the relevant reference/frame data, regardless of `input_stack`'s own storage.
+
+For the actual (per-pixel-expensive) drizzle/forward-warp accumulation, `to_fast_mem`/`to_slow_mem` let
+you stage only the single frame currently being processed onto "fast" memory (e.g. a GPU), instead of
+requiring the whole multi-frame stack to be resident there at once: pass e.g. `to_fast_mem=cu` (from
+`CUDA.jl`) and `to_slow_mem=Array` to run that step on the GPU while `input_stack` stays lazily-loaded/on
+the CPU. Both default to `identity` (no staging at all -- fine if `input_stack` is already a GPU array
+itself, as in the old/simpler usage pattern, or if you just want to stay on the CPU).
 """
 function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_supersampling = 2.0, min_sigma = 2.0,
-                verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = "RGGB", kwargs...)
+                verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = "RGGB",
+                to_fast_mem=identity, to_slow_mem=identity, kwargs...)
     if (!use_drizzle)
         drizzle_supersampling = 1
     end
@@ -87,7 +95,7 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
         src_mono = Array(get_mono(src; use_drizzle=use_drizzle, ref_col=ref_col))
 
         if !isnothing(drizzle_supersampling) && (drizzle_supersampling != 1)
-            warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes)
+            warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes; to_fast_mem, to_slow_mem)
         end
 
         tfm, params = find_transform(src_mono, myref_mono; kwargs...)

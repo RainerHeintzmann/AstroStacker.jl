@@ -140,15 +140,22 @@ an alternative to the `warp` function, to be provided to the alignment function 
 - `use_interp`: whether to use interpolation (true) or not.
 - `bayer_pattern`: a string of size 4 characters, indicating the order of colors. The default ("RGGB") corresponds to this pattern (starting from the top left corner of `input_stack`):
 - `myaxes`: is ignored.
+- `to_fast_mem`/`to_slow_mem`: functions to stage this single frame's source/destination onto "fast"
+  (e.g. GPU) memory and back to `result`/`drizzle_mask`'s own ("slow") memory, so that only one frame at
+  a time -- not the whole multi-frame stack -- needs to live on the fast device. Both default to
+  `identity` (no staging; `result`/`drizzle_mask`/`to_warp` are used in place, as before).
 """
-function do_drizzle_warp!(drizzle_mask, drizzle_supersampling, bayer_pattern, use_interp, result, to_warp, inv_tfm, myaxes)
+function do_drizzle_warp!(drizzle_mask, drizzle_supersampling, bayer_pattern, use_interp, result, to_warp, inv_tfm, myaxes; to_fast_mem=identity, to_slow_mem=identity)
         isnothing(to_warp) && error("For drizzle you need to provide a drizzle_supersample! and a to_warp input, the Bayer-pattern mosaic input")
-        # drizzle_mask = similar(to_warp, eltype(to_warp), dst_size)
-        drizzle_mask .= 0
-        # result = similar(to_warp, dst_size)
-        result .= 0
-        warped = drizzle_warp!(result, drizzle_mask, to_warp, inv_tfm; use_interp=use_interp, supersample = drizzle_supersampling, bayer_pattern)
-        return warped
+        fast_src = to_fast_mem(to_warp)
+        fast_result = to_fast_mem(result)
+        fast_mask = to_fast_mem(drizzle_mask)
+        fast_result .= 0
+        fast_mask .= 0
+        drizzle_warp!(fast_result, fast_mask, fast_src, inv_tfm; use_interp=use_interp, supersample = drizzle_supersampling, bayer_pattern)
+        result .= to_slow_mem(fast_result)
+        drizzle_mask .= to_slow_mem(fast_mask)
+        return result
 end
 
 function get_mono(data; use_drizzle, ref_col=(2,1), dim_color = 4)

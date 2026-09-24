@@ -48,3 +48,25 @@ Random.seed!(42)
     sum_at_source =sum(sum.([stacked[c...] for c in eachslice(y1_coords, dims=2)]))
     @test sum_at_true / sum_at_source > 8
 end
+
+@testset "stack_many fast/slow-mem tiering hooks (to_fast_mem/to_slow_mem)" begin
+    # `copy` is a non-identity but still-CPU "fake tiering" pair: it exercises the staging/destaging
+    # plumbing added to do_drizzle_warp! without needing real GPU hardware. Since it doesn't change any
+    # values, stacking with it must reproduce exactly the same result as the default (identity) hooks.
+    sz = (100, 100)
+    N = 60
+    star_pos = sz .* rand(2, N)
+    star_amp = rand(N)
+    star_shape = 0.3 .+ rand(2, N)
+    Nframes = 6
+    frames = cat((gaussian(sz, offset=star_pos .+ 3 .* (rand(2, N) .- 0.5), weight=star_amp, sigma=star_shape) for _ in 1:Nframes)..., dims=3)
+
+    Random.seed!(123)
+    stacked_default, _ = stack_many(frames; ref_slice=1, f=com_psf, use_drizzle=true, verbose=false, box_size=(15,15))
+
+    Random.seed!(123)
+    stacked_tiered, _ = stack_many(frames; ref_slice=1, f=com_psf, use_drizzle=true, verbose=false, box_size=(15,15),
+                                    to_fast_mem=copy, to_slow_mem=copy)
+
+    @test stacked_default == stacked_tiered
+end

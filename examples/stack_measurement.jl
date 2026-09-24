@@ -129,15 +129,31 @@ function main()
         # ----- stack color camera images which follow a bayer pattern "RGGB" -------
         bayer_pattern = "RGGB"
         use_cuda = true
-        maxim = 10
+        full_stack = true
+        # `data` stays in "slow" memory throughout (plain CPU Array here; could equally stay as the
+        # lazily-loaded/disk-backed stack straight from load_series above, without ever calling
+        # collect/Array on the whole series) -- no need to fit the whole stack in GPU memory at once.
+        data = data[:,:,1:10] # reduce the data to not overfill CUDA memory
+        data = Array(data)
         if use_cuda
-                data = cu(collect(data)[:,:,1:maxim])
-                CUDA.reclaim()
-                CUDA.@time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
-                        box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0);
-                # 5 sec
+                if (full_stack)
+                        data = cu(collect(data))
+                        CUDA.reclaim()
+                        @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
+                                box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.,);
+                        stacked_d = Array(stacked_d);
+                        # 4.2 sec
+                else
+                        # to_fast_mem/to_slow_mem stage only the single frame currently being processed (plus small
+                        # scratch buffers) onto the GPU for the drizzle/forward-warp step, instead of requiring the
+                        # entire multi-frame stack to be GPU-resident -- so this scales to arbitrarily large series.
+                        CUDA.reclaim()
+                        @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
+                                box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0,
+                                to_fast_mem=cu, to_slow_mem=Array);
+                        # 13 sec
+                end
         else
-                data = Array(data[:,:,1:maxim])
                 @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
                         box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0);
                 # 10.4 sec
