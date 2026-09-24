@@ -151,7 +151,7 @@ function main()
                         @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
                                 box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0,
                                 to_fast_mem=cu, to_slow_mem=Array);
-                        # 13 sec
+                        # 9.6 sec
                 end
         else
                 @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,

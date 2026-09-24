@@ -51,18 +51,23 @@ end
 end
 
 """
-    forward_warp!(result, weights, src, tfm; use_interp=false, supersample = 1)
+    forward_warp!(result, weights, src, tfm; use_interp=false, supersample = 1, synchronize=true)
 
 Forward-mode warp: iterate over source, scatter to destination with accumulation.
 
 Runs on whichever backend `result`/`weights`/`src` live on (CPU `Array`s, or a GPU array such as a
 `CuArray`/`ROCArray`/... provided the corresponding GPU package is loaded), via `KernelAbstractions.jl`.
+
+`synchronize`: if `true` (default), blocks until the kernel has completed before returning, so
+`result`/`weights` are immediately ready to read. Callers that launch several such kernels back-to-back
+into independent regions of `result` (e.g. [`drizzle_warp!`](@ref), across its 4 Bayer sub-images) can
+pass `false` and synchronize once themselves afterwards, avoiding one host/device round-trip per launch.
 """
-function forward_warp!(result, weights, src::AbstractMatrix{T}, tfm; use_interp=false, supersample = 1) where T
+function forward_warp!(result, weights, src::AbstractMatrix{T}, tfm; use_interp=false, supersample = 1, synchronize=true) where T
     backend = KernelAbstractions.get_backend(result)
     kernel! = use_interp ? warp_scatter_interp_kernel!(backend) : warp_scatter_kernel!(backend)
     kernel!(result, weights, src, tfm, supersample; ndrange=size(src))
-    KernelAbstractions.synchronize(backend)
+    synchronize && KernelAbstractions.synchronize(backend)
     return result, weights
 end
 
@@ -123,8 +128,11 @@ function drizzle_warp!(result, drizzle_mask, bayer_mosaic, inv_tfm; supersample 
         dst_mat = @view result[:,:,bayer_index[bayer_pix]]
         dst_mask_mat = @view drizzle_mask[:, :, bayer_index[bayer_pix]]
         tfm_both = bayer_pixel_transform(inv_tfm, supersample, sx, sy)
-        forward_warp!(dst_mat, dst_mask_mat, src_mat, tfm_both, use_interp=use_interp)
+        # the 4 sub-images write to disjoint regions of result/drizzle_mask, so the 4 kernel launches
+        # need no synchronization between them -- only once, after all 4 are queued (below).
+        forward_warp!(dst_mat, dst_mask_mat, src_mat, tfm_both, use_interp=use_interp, synchronize=false)
     end
+    KernelAbstractions.synchronize(KernelAbstractions.get_backend(result))
     return result
 end
 
@@ -148,8 +156,11 @@ an alternative to the `warp` function, to be provided to the alignment function 
 function do_drizzle_warp!(drizzle_mask, drizzle_supersampling, bayer_pattern, use_interp, result, to_warp, inv_tfm, myaxes; to_fast_mem=identity, to_slow_mem=identity)
         isnothing(to_warp) && error("For drizzle you need to provide a drizzle_supersample! and a to_warp input, the Bayer-pattern mosaic input")
         fast_src = to_fast_mem(to_warp)
-        fast_result = to_fast_mem(result)
-        fast_mask = to_fast_mem(drizzle_mask)
+        # result/drizzle_mask's current content is about to be overwritten anyway (they get zeroed right
+        # below), so staging it onto fast memory via to_fast_mem would only transfer data we're going to
+        # discard. Allocate fresh fast-memory buffers instead, on the same backend fast_src ended up on.
+        fast_result = similar(fast_src, eltype(result), size(result))
+        fast_mask = similar(fast_src, eltype(drizzle_mask), size(drizzle_mask))
         fast_result .= 0
         fast_mask .= 0
         drizzle_warp!(fast_result, fast_mask, fast_src, inv_tfm; use_interp=use_interp, supersample = drizzle_supersampling, bayer_pattern)
