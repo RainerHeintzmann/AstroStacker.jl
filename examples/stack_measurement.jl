@@ -129,14 +129,20 @@ function main()
         # ----- stack color camera images which follow a bayer pattern "RGGB" -------
         bayer_pattern = "RGGB"
         use_cuda = true
+        maxim = 10
         if use_cuda
-                data = cu(data)
+                data = cu(collect(data)[:,:,1:maxim])
+                CUDA.reclaim()
+                CUDA.@time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
+                        box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0);
+                # 5 sec
         else
-                data = Array(data)
+                data = Array(data[:,:,1:maxim])
+                @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
+                        box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0);
+                # 10.4 sec
         end
 
-        @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
-                box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0);
 
         # dist_limit = 2, 
         # using ProfileCanvas

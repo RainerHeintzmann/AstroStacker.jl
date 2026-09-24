@@ -7,6 +7,7 @@ using Statistics # for median, var, mean
 using NDTools
 using FindShift
 using Interpolations
+using KernelAbstractions # for backend-portable (CPU/GPU) drizzle warp kernels
 
 export correct_dark_flat, stack_many, stack_many_lucky, stack_many_fft
 export com_psf, collect_info

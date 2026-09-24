@@ -1,37 +1,4 @@
 """
-    do_drizzle_warp!(drizzle_mask, to_warp, inv_tfm, myaxes, )
-
-an alternative to the `warp` function, to be provided to the alignment function instead of warp.
-
-# Parameters:
-
-- `drizzle_mask`: a mask, collecting which pixel where assigned.
-- `result`: the assigned pixels.
-- `use_interp`: whether to use interpolation (true) or not.
-- `bayer_pattern`: a string of size 4 characters, indicating the order of colors. The default ("RGGB") corresponds to this pattern (starting from the top left corner of `input_stack`):
-- `myaxes`: is ignored.
-"""
-function do_drizzle_warp!(drizzle_mask, drizzle_supersampling, bayer_pattern, use_interp, result, to_warp, inv_tfm, myaxes)
-        isnothing(to_warp) && error("For drizzle you need to provide a drizzle_supersample! and a to_warp input, the Bayer-pattern mosaic input")
-        # drizzle_mask = similar(to_warp, eltype(to_warp), dst_size)
-        drizzle_mask .= 0
-        # result = similar(to_warp, dst_size)
-        result .= 0
-        warped = drizzle_warp!(result, drizzle_mask, to_warp, inv_tfm; use_interp=use_interp, supersample = drizzle_supersampling, bayer_pattern)
-        return warped
-end
-
-function get_mono(data; use_drizzle, ref_col=(2,1), dim_color = 4)
-    if (use_drizzle)
-        return @view data[ref_col[1]:2:end, ref_col[2]:2:end]
-    elseif (ndims(data)<3)
-         return data
-    else
-         return @view data[:,:,min(size(data,dim_color),ref_col[1])]
-    end
-end
-
-"""
     stack_many(input_stack; use_interp = false, use_drizzle=true, drizzle_supersampling = 2.0, min_sigma = 2.0,
                 verbose = true, ref_slice = size(input_stack, 3)÷2 + 1, kwargs...)
 
@@ -63,20 +30,34 @@ Returns a Tuple of the result image and a list of stacking parameters for each i
 * `box_size`: the box size to use for identifying stars. You should try (15,15), which is not the default.
 
 For other possible (optional) arguments, see the documentation of `align_frames` in the `Astroalign` package.
+
+# GPU usage
+`input_stack` may be a GPU array (e.g. a `CuArray`, with the corresponding GPU package loaded by the
+caller). Star detection (used to determine each frame's alignment) is inherently CPU-bound (it goes
+through `Astroalign`/`Photometry.jl`) and is transparently run on a small, separately-materialized CPU
+copy of the relevant reference/frame data; `input_stack` itself is left untouched on whatever device it
+lives on. The drizzle/forward-warp accumulation (the actual per-pixel-expensive part of stacking) runs
+via `KernelAbstractions.jl` kernels and therefore executes on that same device.
 """
 function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_supersampling = 2.0, min_sigma = 2.0,
                 verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = "RGGB", kwargs...)
-    if (!use_drizzle) 
+    if (!use_drizzle)
         drizzle_supersampling = 1
-    end 
+    end
+    dim_color = 4 # see alsot the calculation of the destination size below
+    dim_stack = 3
     # Sum over colors (for alignment only)
     # ref_mono = bin_mono(@view input_stack[:, :, ref_slice])[:, :, 1]
     # ref_mono = (use_drizzle) ? (@view input_stack[ref_col[1]:2:end, ref_col[2]:2:end, ref_slice]) : (@view input_stack[:,:,ref_slice])
-    ref_mono = get_mono(input_stack[:,:,ref_slice,:]; use_drizzle=use_drizzle, ref_col=ref_col)
+    # Source-detection (Astroalign/Photometry.jl below) is inherently CPU/scalar-bound, and a plain
+    # `input_stack[:,:,ref_slice,:]` materializing getindex on a GPU-array-backed `input_stack` (e.g.
+    # wrapped in an OffsetArray by the FITS loader) can hit GPUArrays' "scalar indexing disallowed"
+    # guard. Go through a lazy `selectdim` view first, then force ONE explicit bulk copy to a plain CPU
+    # array -- this keeps the (large) `input_stack` itself untouched/GPU-resident for the warp/drizzle
+    # step below, which now runs as a real (KernelAbstractions-based) GPU kernel; see warp.jl.
+    ref_mono = get_mono(Array(selectdim(input_stack, dim_stack, ref_slice)); use_drizzle=use_drizzle, ref_col=ref_col)
     reduced_size = size(ref_mono)[1:2]
 
-    dim_color = 4 # see alsot the calculation of the destination size below
-    dim_stack = 3
     Nimgs = size(input_stack, dim_stack)
     Ncol = 3
     if (!use_drizzle)        
@@ -101,7 +82,9 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     for (src, res_slice, mymask) in zip(eachslice(input_stack; dims = dim_stack), eachslice(all_results, dims = dim_stack), eachslice(all_masks, dims = dim_stack))
         # src_mono = bin_mono(src)[:, :, 1]; # Sum over colors
         # src_mono = (use_drizzle) ? (@view src[ref_col[1]:2:end, ref_col[2]:2:end, 1]) : src
-        src_mono = get_mono(src; use_drizzle=use_drizzle, ref_col=ref_col)
+        # forced to a plain CPU array for the same reason as ref_mono above; `src` itself (used for the
+        # actual warp/drizzle accumulation below) stays untouched/GPU-resident.
+        src_mono = Array(get_mono(src; use_drizzle=use_drizzle, ref_col=ref_col))
 
         if !isnothing(drizzle_supersampling) && (drizzle_supersampling != 1)
             warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes)
@@ -164,7 +147,9 @@ end
 function remove_outliers(all_results; kwargs...)
     all_masks = .!isnan.(all_results)
     # Eliminate the NaNs
-    all_results[.!all_masks] .= 0
+    # boolean-mask indexed assignment (all_results[.!all_masks] .= 0) is scalar iteration under the
+    # hood and is disallowed on GPU arrays; ifelse.() is a plain broadcast and works on both CPU and GPU.
+    all_results .= ifelse.(all_masks, all_results, zero(eltype(all_results)))
     return remove_outliers(all_results, all_masks; kwargs...)
 end
 
@@ -184,8 +169,10 @@ function remove_outliers(all_results, all_masks; verbose = true, stack_dim = 3, 
             # outliers = (all_masks .!= 0) .&& abs.(masked_res .- result) .> min_sigma .* weighted_std(masked_res, all_masks; dims = stack_dim)
             outliers = (mask .!= 0) .&& abs.(masked_res .- res_view .* mask) .> min_sigma .* stddev_view
             verbose && println("frame $(n) outliers found: $(sum(outliers)), $(round(100*sum(outliers)/length(outliers); sigdigits=3)) %")
-            masked_res[outliers] .= 0
-            mask[outliers] .= 0
+            # boolean-mask indexed assignment is scalar iteration under the hood and is disallowed on
+            # GPU arrays; ifelse.() is a plain broadcast and works on both CPU and GPU.
+            masked_res .= ifelse.(outliers, zero(eltype(masked_res)), masked_res)
+            mask .= ifelse.(outliers, zero(eltype(mask)), mask)
             n += 1
         end
         divisor = max.(1, sum(all_masks; dims = stack_dim))
