@@ -45,10 +45,19 @@ requiring the whole multi-frame stack to be resident there at once: pass e.g. `t
 `CUDA.jl`) and `to_slow_mem=Array` to run that step on the GPU while `input_stack` stays lazily-loaded/on
 the CPU. Both default to `identity` (no staging at all -- fine if `input_stack` is already a GPU array
 itself, as in the old/simpler usage pattern, or if you just want to stay on the CPU).
+
+`on_checkpoint`, if given, is called with a short descriptive label (e.g. `"after frame 3"`) at several
+points during stacking, so you can trace where memory is actually being allocated -- e.g.
+`on_checkpoint = label -> println(label, ": ", CUDA.memory_status())`.
 """
 function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_supersampling = 2.0, min_sigma = 2.0,
                 verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = "RGGB",
-                to_fast_mem=identity, to_slow_mem=identity, kwargs...)
+                to_fast_mem=identity, to_slow_mem=identity, on_checkpoint=nothing, kwargs...)
+    # calls on_checkpoint(label) if the caller supplied one -- e.g. `on_checkpoint = label ->
+    # println(label, ": ", CUDA.memory_status())` -- to trace where memory (in particular GPU memory) is
+    # actually being allocated, without AstroStacker.jl itself depending on any GPU package. A no-op if
+    # `on_checkpoint` is left at its default `nothing`.
+    checkpoint(label) = isnothing(on_checkpoint) ? nothing : on_checkpoint(label)
     if (!use_drizzle)
         drizzle_supersampling = 1
     end
@@ -82,9 +91,33 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
 
     # dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)...,3))
 
+    fast_src_buf = nothing
+    fast_result_buf = nothing
+    fast_mask_buf = nothing
+    slow_src_buf = nothing
+    slow_result_buf = nothing
+    slow_mask_buf = nothing
     if !isnothing(drizzle_supersampling) && (drizzle_supersampling != 1)
         all_masks = similar(input_stack, eltype(all_results), dst_size)
+        # Pre-allocate the fast-mem scratch buffers ONCE here (only when genuine staging is actually
+        # requested -- to_fast_mem/to_slow_mem not both identity), reused for every frame below instead
+        # of (re-)allocating (and, on a GPU backend, cudaMalloc-ing) fresh ones each frame. When both
+        # hooks are identity (the default), do_drizzle_warp! operates directly in place with no staging
+        # at all -- important for the "pre-cast the whole stack to a CuArray, don't pass to_fast_mem"
+        # usage pattern, which must stay fully GPU-resident with zero extra buffers/copies.
+        if !(to_fast_mem === identity && to_slow_mem === identity)
+            # The slow_*_buf concrete-Array staging buffers exist because GPU array copyto! only has a
+            # fast path from/to a concrete Array, not an arbitrary SubArray/lazy view (which
+            # src/res_slice/mymask usually are).
+            slow_src_buf = zeros(eltype(input_stack), size(selectdim(input_stack, dim_stack, 1)))
+            fast_src_buf = to_fast_mem(slow_src_buf)
+            slow_result_buf = zeros(eltype(all_results), size(selectdim(all_results, dim_stack, 1)))
+            fast_result_buf = to_fast_mem(slow_result_buf)
+            slow_mask_buf = zeros(eltype(all_masks), size(selectdim(all_masks, dim_stack, 1)))
+            fast_mask_buf = to_fast_mem(slow_mask_buf)
+        end
     end
+    checkpoint("after allocating all_results/all_masks (+ scratch buffers)")
 
     myref_mono = ref_mono; # changes to the extracted coordinates after the firt run
     for (src, res_slice, mymask) in zip(eachslice(input_stack; dims = dim_stack), eachslice(all_results, dims = dim_stack), eachslice(all_masks, dims = dim_stack))
@@ -95,7 +128,9 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
         src_mono = Array(get_mono(src; use_drizzle=use_drizzle, ref_col=ref_col))
 
         if !isnothing(drizzle_supersampling) && (drizzle_supersampling != 1)
-            warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes; to_fast_mem, to_slow_mem)
+            warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes;
+                                                                         to_fast_mem, to_slow_mem, fast_src_buf, fast_result_buf, fast_mask_buf,
+                                                                         slow_src_buf, slow_result_buf, slow_mask_buf)
         end
 
         tfm, params = find_transform(src_mono, myref_mono; kwargs...)
@@ -123,22 +158,24 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
             println("stacking: $n, angle: $(round(a; sigdigits = 3)) deg, shift: $(round.(tfm.translation; sigdigits = 4))")
         end
 
+        checkpoint("after frame $n")
         n += 1
     end
 
     result = nothing # Since it is returned
+    checkpoint("before outlier removal / final combination")
 
     if (min_sigma > 0)
         if (use_drizzle)
-            result = remove_outliers(all_results, all_masks; verbose=verbose, stack_dim=dim_stack, min_sigma=min_sigma)
+            result = remove_outliers(all_results, all_masks; verbose=verbose, stack_dim=dim_stack, min_sigma=min_sigma, on_checkpoint)
         else
             if (size(all_results,dim_color)==1)
-                result = remove_outliers(all_results;verbose=verbose, stack_dim=dim_stack, min_sigma=min_sigma)
+                result = remove_outliers(all_results;verbose=verbose, stack_dim=dim_stack, min_sigma=min_sigma, on_checkpoint)
             else
                 res_size = ntuple(n -> (n==dim_stack) ? 1 : size(all_results, n), ndims(all_results))
                 result = similar(all_results, res_size)
                 for (all_c, res_c) in zip(eachslice(all_results; dims = dim_color),eachslice(result; dims = dim_color))
-                    res_c .= remove_outliers(all_c; verbose=verbose, stack_dim=dim_stack, min_sigma=min_sigma)
+                    res_c .= remove_outliers(all_c; verbose=verbose, stack_dim=dim_stack, min_sigma=min_sigma, on_checkpoint)
                 end
             end
         end
@@ -146,6 +183,7 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
         divisor = max.(1, sum(all_masks; dims = dim_stack))
         result = sum(all_results, dims = dim_stack) ./ divisor
     end
+    checkpoint("after outlier removal / final combination")
 
     # Normalize drizzle result
     # result ./= max.(1, all_params[end][:drizzle_mask])
@@ -161,13 +199,16 @@ function remove_outliers(all_results; kwargs...)
     return remove_outliers(all_results, all_masks; kwargs...)
 end
 
-function remove_outliers(all_results, all_masks; verbose = true, stack_dim = 3, min_sigma = 2.0)
+function remove_outliers(all_results, all_masks; verbose = true, stack_dim = 3, min_sigma = 2.0, on_checkpoint=nothing)
+        checkpoint(label) = isnothing(on_checkpoint) ? nothing : on_checkpoint(label)
         verbose && println("... summing results")
         divisor = max.(eltype(all_results)(1f-8), sum(all_masks; dims = stack_dim))
         result = sum(all_results; dims = stack_dim) ./ divisor
+        checkpoint("remove_outliers: after initial result/divisor")
 
         verbose && println("... removing outliers")
         stddev_map = weighted_std(all_results, all_masks; dims = stack_dim)
+        checkpoint("remove_outliers: after weighted_std")
         n=1
         # remove the stack_dim from the result and stddev_map
         crunched_dims = ntuple(n->(n!=stack_dim) ? (:) : 1, ndims(all_results))
@@ -181,8 +222,11 @@ function remove_outliers(all_results, all_masks; verbose = true, stack_dim = 3, 
             # GPU arrays; ifelse.() is a plain broadcast and works on both CPU and GPU.
             masked_res .= ifelse.(outliers, zero(eltype(masked_res)), masked_res)
             mask .= ifelse.(outliers, zero(eltype(mask)), mask)
+            checkpoint("remove_outliers: after outlier-loop frame $n")
             n += 1
         end
         divisor = max.(1, sum(all_masks; dims = stack_dim))
-        return sum(all_results; dims = stack_dim) ./ divisor
+        final = sum(all_results; dims = stack_dim) ./ divisor
+        checkpoint("remove_outliers: after final combination")
+        return final
 end

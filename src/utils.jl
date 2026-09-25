@@ -43,11 +43,30 @@ end
     weighted_std(data, weights; dims=4)
 
 Calculates the standard deviation allowing for (binary) weights indicating which pixels are considered.
+
+`dims` must be a single dimension (not a tuple): this accumulates the variance one slice along `dims` at
+a time (mirroring `remove_outliers`'s own per-slice loop), instead of computing it via one large broadcast
+over the whole (potentially GPU-resident) `data`/`weights` -- doing so would otherwise need at least one
+full-size temporary the same size as `data` itself (e.g. `mp .* weights` broadcasts the reduced-size mean
+back up against the full-size `weights`), which for a large multi-frame stack is a real, avoidable spike
+in (GPU) memory use on top of `data`/`weights` themselves.
 """
 function weighted_std(data, weights; dims = 4)
-    # mean projection of counting pixels
-    mp = sum(data; dims) ./ max.(1, sum(weights; dims))
-    myvar = sum(abs2.((data .- mp .* weights).* weights); dims) ./ max.(1, sum(weights; dims))
+    divisor = max.(1, sum(weights; dims))
+    mp = dropdims(sum(data; dims) ./ divisor; dims)
+    divisor = dropdims(divisor; dims)
+    myvar = similar(mp)
+    myvar .= 0
+    # explicit reused scratch buffer for the per-slice residual, instead of a fresh chained-broadcast
+    # temporary each iteration -- on a GPU backend, Julia's GC doesn't track GPU memory pressure, so
+    # several iterations' worth of small dead temporaries can otherwise pile up in the memory pool
+    # before GC catches up to free them.
+    scratch = similar(mp)
+    for (d_slice, w_slice) in zip(eachslice(data; dims), eachslice(weights; dims))
+        scratch .= abs2.((d_slice .- mp .* w_slice) .* w_slice)
+        myvar .+= scratch
+    end
+    myvar ./= divisor
     return sqrt.(myvar)
 end
 

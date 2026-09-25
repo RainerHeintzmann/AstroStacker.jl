@@ -152,20 +152,66 @@ an alternative to the `warp` function, to be provided to the alignment function 
   (e.g. GPU) memory and back to `result`/`drizzle_mask`'s own ("slow") memory, so that only one frame at
   a time -- not the whole multi-frame stack -- needs to live on the fast device. Both default to
   `identity` (no staging; `result`/`drizzle_mask`/`to_warp` are used in place, as before).
+- `fast_src_buf`/`fast_result_buf`/`fast_mask_buf`: optional pre-allocated fast-memory scratch buffers
+  (one frame's worth each, already staged via `to_fast_mem`), reused via `copyto!` instead of allocating
+  fresh ones on every call -- pass these (allocated once outside the per-frame loop) to avoid repeated
+  (and, on a GPU, potentially expensive) allocation. If omitted, fresh buffers are allocated as before.
+- `slow_src_buf`: an optional pre-allocated plain (concrete `Array`) CPU scratch buffer, the same shape as
+  `to_warp`. Required alongside `fast_src_buf` -- `to_warp` is frequently a `SubArray` (or similar) view,
+  and GPU array types generally only provide an efficient `copyto!` fast path from/to a concrete `Array`,
+  not from/to an arbitrary view/lazy wrapper (which falls back to slow, and on a GPU array disallowed,
+  scalar indexing on whichever side is the GPU array); `to_warp` is therefore always first `copyto!`'d
+  into this concrete buffer, then that is `copyto!`'d into `fast_src_buf` -- and symmetrically on the way
+  back out via `slow_result_buf`/`slow_mask_buf` below.
+- `slow_result_buf`/`slow_mask_buf`: like `slow_src_buf`, but for the way back: `result`/`drizzle_mask`
+  are themselves frequently `SubArray` views (into the caller's larger accumulator), so `fast_result`/
+  `fast_mask` are first `copyto!`'d into these concrete buffers, then those into `result`/`drizzle_mask`.
+  Required alongside `fast_result_buf`/`fast_mask_buf`.
 """
-function do_drizzle_warp!(drizzle_mask, drizzle_supersampling, bayer_pattern, use_interp, result, to_warp, inv_tfm, myaxes; to_fast_mem=identity, to_slow_mem=identity)
+function do_drizzle_warp!(drizzle_mask, drizzle_supersampling, bayer_pattern, use_interp, result, to_warp, inv_tfm, myaxes;
+                           to_fast_mem=identity, to_slow_mem=identity,
+                           fast_src_buf=nothing, fast_result_buf=nothing, fast_mask_buf=nothing,
+                           slow_src_buf=nothing, slow_result_buf=nothing, slow_mask_buf=nothing)
         isnothing(to_warp) && error("For drizzle you need to provide a drizzle_supersample! and a to_warp input, the Bayer-pattern mosaic input")
-        fast_src = to_fast_mem(to_warp)
+        if to_fast_mem === identity && to_slow_mem === identity
+            # No staging requested at all: operate directly in place on whatever device result/
+            # drizzle_mask/to_warp already live on -- zero extra buffers/copies, exactly matching
+            # behavior from before fast/slow-mem tiering existed. This matters in particular for the
+            # "pre-cast the whole stack to a CuArray, don't pass to_fast_mem/to_slow_mem" usage pattern:
+            # it must stay fully GPU-resident with no round-trips through CPU staging buffers.
+            drizzle_mask .= 0
+            result .= 0
+            drizzle_warp!(result, drizzle_mask, to_warp, inv_tfm; use_interp=use_interp, supersample=drizzle_supersampling, bayer_pattern)
+            return result
+        end
+        fast_src = let
+            if isnothing(fast_src_buf)
+                to_fast_mem(to_warp)
+            else
+                copyto!(slow_src_buf, to_warp)
+                copyto!(fast_src_buf, slow_src_buf)
+            end
+        end
         # result/drizzle_mask's current content is about to be overwritten anyway (they get zeroed right
         # below), so staging it onto fast memory via to_fast_mem would only transfer data we're going to
-        # discard. Allocate fresh fast-memory buffers instead, on the same backend fast_src ended up on.
-        fast_result = similar(fast_src, eltype(result), size(result))
-        fast_mask = similar(fast_src, eltype(drizzle_mask), size(drizzle_mask))
+        # discard. Allocate fresh fast-memory buffers instead, on the same backend fast_src ended up on
+        # (unless reusable ones were already provided).
+        fast_result = something(fast_result_buf, similar(fast_src, eltype(result), size(result)))
+        fast_mask = something(fast_mask_buf, similar(fast_src, eltype(drizzle_mask), size(drizzle_mask)))
         fast_result .= 0
         fast_mask .= 0
         drizzle_warp!(fast_result, fast_mask, fast_src, inv_tfm; use_interp=use_interp, supersample = drizzle_supersampling, bayer_pattern)
-        result .= to_slow_mem(fast_result)
-        drizzle_mask .= to_slow_mem(fast_mask)
+        if isnothing(fast_result_buf)
+            result .= to_slow_mem(fast_result)
+            drizzle_mask .= to_slow_mem(fast_mask)
+        else
+            # result/drizzle_mask are frequently SubArray views too, so -- symmetrically with the source
+            # side above -- always funnel through a concrete Array on both ends of each copyto!.
+            copyto!(slow_result_buf, fast_result)
+            copyto!(result, slow_result_buf)
+            copyto!(slow_mask_buf, fast_mask)
+            copyto!(drizzle_mask, slow_mask_buf)
+        end
         return result
 end
 

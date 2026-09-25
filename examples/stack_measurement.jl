@@ -134,13 +134,20 @@ function main()
         # lazily-loaded/disk-backed stack straight from load_series above, without ever calling
         # collect/Array on the whole series) -- no need to fit the whole stack in GPU memory at once.
         data = data[:,:,1:10] # reduce the data to not overfill CUDA memory
-        data = Array(data)
+        data = Array(data);
         if use_cuda
                 if (full_stack)
-                        data = cu(collect(data))
+                        data = cu(collect(data));
+                        mem_gb() = begin
+                                free, total = CUDA.memory_info()
+                                round((total - free) / 1e9, digits=2)
+                        end                        
+                        @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
+                                box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.,on_checkpoint = label -> println(label, ": ", mem_gb(), " GB"));
+
                         CUDA.reclaim()
                         @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
-                                box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.,);
+                                box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.);
                         stacked_d = Array(stacked_d);
                         # 4.2 sec
                 else
@@ -156,7 +163,7 @@ function main()
         else
                 @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
                         box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0);
-                # 10.4 sec
+                # 9.8 sec
         end
 
 
