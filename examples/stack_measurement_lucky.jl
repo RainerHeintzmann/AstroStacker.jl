@@ -74,14 +74,24 @@ function main()
 
         # Apply dark subtraction and flat field division to all images
         # Note: Conversion to Float32 is required - Float64 causes FITS loading issues
-        @time data = correct_dark_flat(data, dark, flat);
+        # @time data = correct_dark_flat(data, dark, flat);
+        # @time data = correct_dark_flat(data, dark);
 
         grid_size = (10,10)
         quality_power = 2.0
         data = collect(data)
         single_channel = data[2:2:end, 1:2:end, :];
 
-        result_fft, aligned_fft, shifts_fft = stack_many_fft(single_channel)
+        bayer_pattern = "RGGB"
+        @time fft_stacked_bayer, all_params_fft_bayer = stack_many_fft(Float32.(data); bayer_pattern=bayer_pattern, drizzle_supersampling=2.0);
+
+        fft_stacked_mono, all_params_fft_mono = stack_many_fft(single_channel; use_drizzle=false);
+        shifted = AstroStacker.apply_shift(Float32.(single_channel), all_params_fft_mono)
+        @vt single_channel shifted
+        
+        plot()
+        @time fft_stacked_mono, all_params_fft_mono = stack_many_fft(Float32.(single_channel); drizzle_supersampling=2.0);
+        # result_fft, aligned_fft, shifts_fft = stack_many_fft(single_channel)
 
         result, aligned, warps, quality = stack_many_lucky(single_channel; grid_size=grid_size, quality_power=quality_power, verbose=true)
 

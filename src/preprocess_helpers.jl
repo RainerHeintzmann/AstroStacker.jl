@@ -4,6 +4,7 @@ using NDTools: select_region_view
     correct_dark_flat(data, dark_img=nothing, flat_img=nothing, channel=nothing; T=Float32)
 
 corrects data using a `dark_img` and `flat_img` by subtracting the dark and deviding by the normalized, dark-subtracted `flat_img`.
+flat_img: if given, a the data is devided by this flat image, which already needs to be dark-corrected!
 
 * minval: a minum value for the dark-subtracted flat image to avoid division by zero.
 """
@@ -14,7 +15,8 @@ function correct_dark_flat(data, dark_img=nothing, flat_img=nothing, channel=not
     end
     if !isnothing(flat_img)
         dark_img = isnothing(dark_img) ? 0 : dark_img
-        flat_img = max.(select_region_view(flat_img, new_size=size(data)[1:2]) .- dark_img, minval);
+        flat_img = Float32.(select_region_view(flat_img, new_size=size(data)[1:2]));
+        # flat_img = max.(select_region_view(flat_img, new_size=size(data)[1:2]) .- dark_img, minval);
         flat_img ./= T.(sum(flat_img)/length(flat_img))        
         data = T.(T.(data) ./ flat_img);
     end

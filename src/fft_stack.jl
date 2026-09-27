@@ -50,3 +50,17 @@ function stack_many_fft(input_stack; shift_fun=FindShift.find_shift_iter, kwargs
     find_transform_fun(src_mono, ref_mono; kw...) = fft_find_transform(src_mono, ref_mono; shift_fun, kw...)
     return stack_many(input_stack; find_transform_fun, kwargs...)
 end
+
+"""
+    apply_shift(input_stack, params)
+
+creates a shifted stack using the shifts stored in `params`, for diagnostic/debug reasons only.
+"""
+function apply_shift(input_stack, params)
+    res = []
+    for (slice, p) in zip(eachslice(input_stack, dims=3), params)
+        @show size(slice)
+        push!(res, FindShift.shift(slice, Tuple(p.tfm.translation)))
+    end
+    return cat(res..., dims=3)
+end

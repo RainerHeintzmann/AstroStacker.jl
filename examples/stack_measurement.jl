@@ -261,9 +261,19 @@ function main()
         # Much cheaper than stack_many_lucky above: useful for a quick preview, or when frames only
         # jitter (no rotation/scale, no spatially-varying local distortion) so a single global shift
         # per frame is enough. Also useful to build a more stable reference frame for stack_many_lucky
-        # than a single raw input frame.
-        @time fft_stacked = stack_many_fft(all_binned_m);
-        plot(mono_for_display(reshape(fft_stacked.result, size(fft_stacked.result)...,1,1), 0.08))
+        # than a single raw input frame. `all_binned_m` is already-debayered mono data, so use_drizzle=false
+        # here (matching how it's used with stack_many above) -- see below for the raw Bayer-mosaic case.
+        @time fft_stacked, all_params_fft = stack_many_fft(all_binned_m; use_drizzle=false);
+        plot(mono_for_display(fft_stacked, 0.08))
+
+        # stack_many_fft shares stack_many's full implementation (just swapping star-detection + RANSAC
+        # for fast FFT-correlation registration -- see fft_find_transform), so it equally supports the raw
+        # Bayer-mosaic/drizzle path, GPU fast/slow-mem tiering, etc. -- everything documented in
+        # stack_many's own docstring:
+        @time fft_stacked_bayer, all_params_fft_bayer = stack_many_fft(data; bayer_pattern=bayer_pattern, drizzle_supersampling=2.0);
+        plot(prepare_for_display(fft_stacked_bayer, 0.08))
+        # try `shift_fun=AstroStacker.FindShift.find_shift_lk` (Lucas-Kanade) instead of the default FFT-based estimator:
+        # @time fft_stacked_lk, _ = stack_many_fft(data; bayer_pattern=bayer_pattern, shift_fun=AstroStacker.FindShift.find_shift_lk);
 
         plot(mono_for_display(reshape(lucky.result, size(lucky.result)...,1,1), 0.08))
         # per-frame mean patch quality, to spot outlier (badly-seeing-affected) frames

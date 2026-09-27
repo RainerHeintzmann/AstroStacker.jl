@@ -6,13 +6,29 @@ Stacks many image frames (`input_stack`) stacked along the 3rd dimension into a 
 Returns a Tuple of the result image and a list of stacking parameters for each image.
 
 # Parameters
-* `input_stack`: input stack to align and sum in the stacking operation. This needs to be a bayer-pattern mosaic. This input stack should have the individual images stacked along dimension 3. 
+* `input_stack`: input stack to align and sum in the stacking operation. If `use_drizzle=true` (the
+    default), this must be a raw, still-mosaiced Bayer-pattern frame series (each frame a single-channel
+    2D image where R/G/B values sit at different pixel positions per `bayer_pattern`). If `use_drizzle=false`,
+    it should already be mono (a single already-extracted channel) or already-debayered color data (with an
+    explicit 4th, color, dimension) -- `use_drizzle` is not a generic "average vs. drizzle-algorithm" switch,
+    it specifically means "treat `input_stack` as a raw Bayer mosaic and reconstruct R/G/B via drizzle."
+    This input stack should have the individual images stacked along dimension 3.
     Internally first a binned version is calculated and then the transformation parameters are used to transform the original data.
-* `use_drizzle`: if `true` the input_stack is interpreted as a bayer pattern and the drizzle algorithm  with the parameter below is applied.
+* `use_drizzle`: if `true`, `input_stack` is interpreted as a raw Bayer-pattern mosaic (see above) and
+    reconstructed into a 3-channel R/G/B result via the drizzle algorithm (mask-tracked scatter-warp,
+    see `src/warp.jl`) -- regardless of `drizzle_supersampling`'s value, even at `1` (no extra upsampling).
+    If `false`, `input_stack` is assumed already mono or already-debayered, and frames are combined via a
+    plain (non-drizzle) warp with no separate per-pixel coverage mask.
 * `use_interp`: if `true` linar interpolation will be used on destination.
-* `drizzle_supersampling`: This is the supersampling factor in comparison to one original (red) color sampling. 
+* `drizzle_supersampling`: only meaningful when `use_drizzle=true`. This is the supersampling factor in
+    comparison to one original (red) color sampling.
     The default of `2` means that the result size will be equal to the original size, but interpolation free.
-    It is important to stack enough images such that no holes remain in the stacked image.
+    It is important to stack enough images (with enough sub-pixel shift diversity between them) such that no
+    holes remain in the stacked image -- see `max_uncovered_frac` below.
+* `max_uncovered_frac`: only meaningful when `use_drizzle=true`. If more than this fraction of output pixels
+    end up with no contributing frame at all (a "hole" -- e.g. because the per-frame shifts don't provide
+    enough sub-pixel diversity to fill the supersampled grid, not because registration itself is wrong), a
+    warning is printed. Default `0.05` (5%).
 * `ref_col`: The index in X and Y as a tuple to use as the reference color channel for alignment only. default=(2,1), which is often the green channel.
 * `ref_slice`: an integer indicating the slice to use as a reference image. (default: middle of the stack to minimize field rotation effects).
 * `min_sigma`: minimum number of standard deviations a single pixel needs to be away from the mean of that pixel to be excluded. 
@@ -60,7 +76,8 @@ unchanged). See [`stack_many_fft`](@ref) for a fast, translation-only alternativ
 """
 function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_supersampling = 2.0, min_sigma = 2.0,
                 verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = "RGGB",
-                to_fast_mem=identity, to_slow_mem=identity, on_checkpoint=nothing, find_transform_fun=find_transform, kwargs...)
+                to_fast_mem=identity, to_slow_mem=identity, on_checkpoint=nothing, find_transform_fun=find_transform,
+                max_uncovered_frac=0.05, kwargs...)
     # calls on_checkpoint(label) if the caller supplied one -- e.g. `on_checkpoint = label ->
     # println(label, ": ", CUDA.memory_status())` -- to trace where memory (in particular GPU memory) is
     # actually being allocated, without AstroStacker.jl itself depending on any GPU package. A no-op if
@@ -105,7 +122,12 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     slow_src_buf = nothing
     slow_result_buf = nothing
     slow_mask_buf = nothing
-    if !isnothing(drizzle_supersampling) && (drizzle_supersampling != 1)
+    if use_drizzle
+        # Bayer-mosaic reconstruction always needs the mask-tracked drizzle scatter-warp (to correctly
+        # assign mosaic sub-pixels to R/G/B channels), regardless of drizzle_supersampling's value -- even
+        # at exactly 1 (no extra upsampling). A dummy/undersized all_masks here (as would result from
+        # gating this on drizzle_supersampling != 1 instead) causes a shape-mismatch crash later in
+        # remove_outliers, unrelated to how many outliers are actually found.
         all_masks = similar(input_stack, eltype(all_results), dst_size)
         # Pre-allocate the fast-mem scratch buffers ONCE here (only when genuine staging is actually
         # requested -- to_fast_mem/to_slow_mem not both identity), reused for every frame below instead
@@ -135,7 +157,7 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
         # actual warp/drizzle accumulation below) stays untouched/GPU-resident.
         src_mono = Array(get_mono(src; use_drizzle=use_drizzle, ref_col=ref_col))
 
-        if !isnothing(drizzle_supersampling) && (drizzle_supersampling != 1)
+        if use_drizzle
             warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes;
                                                                          to_fast_mem, to_slow_mem, fast_src_buf, fast_result_buf, fast_mask_buf,
                                                                          slow_src_buf, slow_result_buf, slow_mask_buf)
@@ -168,6 +190,19 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
 
         checkpoint("after frame $n")
         n += 1
+    end
+
+    if use_drizzle
+        # Drizzle only fills the (possibly supersampled) output grid correctly if the per-frame shifts
+        # provide enough sub-pixel diversity -- if every frame lands at nearly the same sub-pixel phase
+        # (e.g. a well-tracked mount with genuinely tiny frame-to-frame jitter), most output pixels can
+        # end up with no contributing frame at all ("holes"), regardless of how accurate the registration
+        # is. Warn if that's happening, since it looks like a registration bug but usually isn't one.
+        coverage = sum(all_masks; dims = dim_stack)
+        uncovered_frac = count(iszero, coverage) / length(coverage)
+        if uncovered_frac > max_uncovered_frac
+            @warn "Drizzle output has $(round(100*uncovered_frac; sigdigits=3))% of pixels with no contributing frame at all (drizzle_supersampling=$drizzle_supersampling). This usually means the per-frame shifts don't provide enough sub-pixel diversity to fill the supersampled output grid, not a registration error -- check that frames actually have varied sub-pixel jitter, reduce drizzle_supersampling, or use use_interp=true."
+        end
     end
 
     result = nothing # Since it is returned
