@@ -6,23 +6,47 @@ Stacks many image frames (`input_stack`) stacked along the 3rd dimension into a 
 Returns a Tuple of the result image and a list of stacking parameters for each image.
 
 # Parameters
-* `input_stack`: input stack to align and sum in the stacking operation. If `use_drizzle=true` (the
-    default), this must be a raw, still-mosaiced Bayer-pattern frame series (each frame a single-channel
-    2D image where R/G/B values sit at different pixel positions per `bayer_pattern`). If `use_drizzle=false`,
-    it should already be mono (a single already-extracted channel) or already-debayered color data (with an
-    explicit 4th, color, dimension) -- `use_drizzle` is not a generic "average vs. drizzle-algorithm" switch,
-    it specifically means "treat `input_stack` as a raw Bayer mosaic and reconstruct R/G/B via drizzle."
-    This input stack should have the individual images stacked along dimension 3.
-    Internally first a binned version is calculated and then the transformation parameters are used to transform the original data.
-* `use_drizzle`: if `true`, `input_stack` is interpreted as a raw Bayer-pattern mosaic (see above) and
-    reconstructed into a 3-channel R/G/B result via the drizzle algorithm (mask-tracked scatter-warp,
-    see `src/warp.jl`) -- regardless of `drizzle_supersampling`'s value, even at `1` (no extra upsampling).
-    If `false`, `input_stack` is assumed already mono or already-debayered, and frames are combined via a
-    plain (non-drizzle) warp with no separate per-pixel coverage mask.
+* `input_stack`: input stack to align and sum in the stacking operation, with individual images stacked
+    along dimension 3. Whether this needs to be a raw Bayer mosaic or already mono/already-debayered data
+    is controlled by `bayer_pattern` alone (see below) -- independently of `use_drizzle`.
+* `bayer_pattern`: a string of 4 characters indicating the order of colors (see the diagram below),
+    or `nothing`. This is the *only* thing that determines whether `input_stack` is treated as a raw,
+    still-mosaiced Bayer-pattern frame series (each frame a single-channel 2D image where R/G/B values sit
+    at different pixel positions) needing debayering into 3 channels -- vs. already mono (a single
+    already-extracted channel) or already-debayered color data (with an explicit 4th, color, dimension),
+    which needs no further Bayer handling. Defaults to `nothing` (no debayering); pass e.g. `"RGGB"` for a
+    raw Bayer-camera mosaic, corresponding to this pattern (starting from the top left corner of `input_stack`):
+
+    ```
+    R G R G
+    G B R B
+    R G R G
+    G B R B
+    ```
+
+    How debayering combines with `use_drizzle` (all 4 combinations are meaningful):
+    + `bayer_pattern = nothing` (the default), `use_drizzle=true` (also the default): mono (or
+        already-debayered, per-channel) data, accumulated via the mask-tracked drizzle scatter-warp
+        (sub-pixel diversity accumulation, optional supersampling), just without any Bayer sub-image
+        splitting or 3-channel reconstruction.
+    + `bayer_pattern = nothing`, `use_drizzle=false`: mono/already-color data, combined via a plain
+        single-shot backward-warp with no separate per-pixel coverage mask (no supersampling).
+    + `bayer_pattern` a pattern (e.g. `"RGGB"`), `use_drizzle=true`: raw Bayer mosaic, reconstructed into
+        a 3-channel R/G/B result via the drizzle algorithm (mask-tracked scatter-warp, see `src/warp.jl`)
+        -- regardless of `drizzle_supersampling`'s value, even at `1` (no extra upsampling), since
+        debayering itself requires the scatter-warp's per-Bayer-subpixel handling.
+    + `bayer_pattern` a pattern, `use_drizzle=false`: the whole stack is first debayered up front via the
+        standard (binning) algorithm ([`bin_rgb`](@ref)), then combined exactly like the mono/already-color
+        non-drizzle case above, applied independently to each of the 3 resulting channels.
+* `use_drizzle`: selects the accumulation *algorithm* -- the mask-tracked drizzle scatter-warp (`true`,
+    the default) vs. a plain single-shot backward-warp (`false`) -- independent of `bayer_pattern` (see
+    above); debayering (`bayer_pattern` not `nothing`) works with either.
 * `use_interp`: if `true` linar interpolation will be used on destination.
-* `drizzle_supersampling`: only meaningful when `use_drizzle=true`. This is the supersampling factor in
-    comparison to one original (red) color sampling.
-    The default of `2` means that the result size will be equal to the original size, but interpolation free.
+* `drizzle_supersampling`: only meaningful when `use_drizzle=true`; passing anything other than `1` together
+    with `use_drizzle=false` is an error (it would otherwise have no effect and be silently ignored). This
+    is the supersampling factor in comparison to one original (red) color sampling. Defaults to `2` when
+    `use_drizzle=true` (the result size will be equal to the original size, but interpolation free) and to
+    `1` when `use_drizzle=false`.
     It is important to stack enough images (with enough sub-pixel shift diversity between them) such that no
     holes remain in the stacked image -- see `max_uncovered_frac` below.
 * `max_uncovered_frac`: only meaningful when `use_drizzle=true`. If more than this fraction of output pixels
@@ -31,18 +55,10 @@ Returns a Tuple of the result image and a list of stacking parameters for each i
     warning is printed. Default `0.05` (5%).
 * `ref_col`: The index in X and Y as a tuple to use as the reference color channel for alignment only. default=(2,1), which is often the green channel.
 * `ref_slice`: an integer indicating the slice to use as a reference image. (default: middle of the stack to minimize field rotation effects).
-* `min_sigma`: minimum number of standard deviations a single pixel needs to be away from the mean of that pixel to be excluded. 
+* `min_sigma`: minimum number of standard deviations a single pixel needs to be away from the mean of that pixel to be excluded.
                If this number is set to zero, the outlier-exclusion algorithm will not be run.
 * `min_fwhm`: minimum FWHM to accept for stars to be considered in the alignment
 * `verbose`: prints diagnostic output, if `true`. (default: `true`)
-* `bayer_pattern`: a string of size 4 characters, indicating the order of colors. The default ("RGGB") corresponds to this pattern (starting from the top left corner of `input_stack`):
-
-    ```
-    R G R G
-    G B R B
-    R G R G
-    G B R B 
-    ```
 * `box_size`: the box size to use for identifying stars. You should try (15,15), which is not the default.
 
 For other possible (optional) arguments, see the documentation of `align_frames` in the `Astroalign` package.
@@ -74,8 +90,8 @@ set to whatever should be used as the reference for the next frame (for `Astroal
 is a reusable photometry table; a custom estimator that has no such table can simply set it to `ref_mono`
 unchanged). See [`stack_many_fft`](@ref) for a fast, translation-only alternative built this way.
 """
-function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_supersampling = 2.0, min_sigma = 2.0,
-                verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = "RGGB",
+function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_supersampling = (use_drizzle ? 2.0 : 1.0),
+                min_sigma = 2.0, verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = nothing,
                 to_fast_mem=identity, to_slow_mem=identity, on_checkpoint=nothing, find_transform_fun=find_transform,
                 max_uncovered_frac=0.05, kwargs...)
     # calls on_checkpoint(label) if the caller supplied one -- e.g. `on_checkpoint = label ->
@@ -83,8 +99,22 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     # actually being allocated, without AstroStacker.jl itself depending on any GPU package. A no-op if
     # `on_checkpoint` is left at its default `nothing`.
     checkpoint(label) = isnothing(on_checkpoint) ? nothing : on_checkpoint(label)
-    if (!use_drizzle)
-        drizzle_supersampling = 1
+    if !isnothing(bayer_pattern) && !use_drizzle
+        # Debayering itself always requires per-frame handling of 3 channels, but doesn't require the
+        # drizzle scatter-warp specifically: debayer the whole stack up front via the standard (binning)
+        # algorithm, then treat the result as ordinary already-color input for the rest of this function
+        # (registration from the mono reference channel, then the same transform applied independently to
+        # each color channel via the plain warp below) -- reuses that existing code path unchanged.
+        input_stack = bin_rgb(input_stack; bayer_pattern)
+        bayer_pattern = nothing
+    end
+    if !use_drizzle && drizzle_supersampling != 1
+        # drizzle_supersampling only means anything for the drizzle scatter-warp algorithm; silently
+        # forcing it to 1 here (as this used to do) discards an explicit, probably-mistaken user request
+        # without any indication -- e.g. `stack_many_fft(mono_data; drizzle_supersampling=2.0)` with
+        # use_drizzle=false left unnoticed. bayer_pattern doesn't change this: it's meaningless whenever
+        # use_drizzle=false, whether or not the (possibly just-debayered) input is mono or color.
+        error("drizzle_supersampling=$drizzle_supersampling has no effect when use_drizzle=false (only the drizzle scatter-warp algorithm supports supersampling). Remove drizzle_supersampling, or set use_drizzle=true.")
     end
     dim_color = 4 # see alsot the calculation of the destination size below
     dim_stack = 3
@@ -97,14 +127,11 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     # guard. Go through a lazy `selectdim` view first, then force ONE explicit bulk copy to a plain CPU
     # array -- this keeps the (large) `input_stack` itself untouched/GPU-resident for the warp/drizzle
     # step below, which now runs as a real (KernelAbstractions-based) GPU kernel; see warp.jl.
-    ref_mono = get_mono(Array(selectdim(input_stack, dim_stack, ref_slice)); use_drizzle=use_drizzle, ref_col=ref_col)
+    ref_mono = get_mono(Array(selectdim(input_stack, dim_stack, ref_slice)); bayer_pattern, ref_col=ref_col)
     reduced_size = size(ref_mono)[1:2]
 
     Nimgs = size(input_stack, dim_stack)
-    Ncol = 3
-    if (!use_drizzle)        
-        Ncol = size(input_stack, dim_color)
-    end
+    Ncol = isnothing(bayer_pattern) ? size(input_stack, dim_color) : 3
     dst_size = round.(Int, ((reduced_size .* drizzle_supersampling)..., Nimgs, Ncol))
     all_params = []
     all_results = similar(input_stack, dst_size)
@@ -155,7 +182,7 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
         # src_mono = (use_drizzle) ? (@view src[ref_col[1]:2:end, ref_col[2]:2:end, 1]) : src
         # forced to a plain CPU array for the same reason as ref_mono above; `src` itself (used for the
         # actual warp/drizzle accumulation below) stays untouched/GPU-resident.
-        src_mono = Array(get_mono(src; use_drizzle=use_drizzle, ref_col=ref_col))
+        src_mono = Array(get_mono(src; bayer_pattern, ref_col=ref_col))
 
         if use_drizzle
             warp_function(img_from, inv_tfm, myaxes) = do_drizzle_warp!(mymask, drizzle_supersampling, bayer_pattern, use_interp, res_slice, src, inv_tfm, myaxes;

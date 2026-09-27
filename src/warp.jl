@@ -102,6 +102,19 @@ function bayer_pixel_transform(inv_tfm, supersample, sx, sy)
 end
 
 """
+    mono_pixel_transform(inv_tfm, supersample)
+
+Like [`bayer_pixel_transform`](@ref), but for mono (non-Bayer) drizzle: just the supersampling zoom
+composed with the inverse of the frame-to-reference registration transform `inv_tfm` -- no Bayer-sub-image
+grid-shift, since there is no mosaic sub-sampling involved (the whole frame is warped as one source).
+"""
+function mono_pixel_transform(inv_tfm, supersample)
+    my_zoom = AffineMap(SMatrix{2,2}(supersample, 0, 0, supersample), SVector(0.0, 0.0))
+    tfm_both = compose(my_zoom, inv(inv_tfm))
+    return AffineMap(SMatrix{2,2}(tfm_both.linear), SVector{2}(tfm_both.translation))
+end
+
+"""
     drizzle_warp!(result, drizzle_mask, bayer_mosaic, tfm; use_interp=false, supersample = 2.0, bayer_pattern = "RGGB")
 
 Performs the forward warping of in input bayer mosaic (`bayer_mosaic`) with the transformation as defined by `tfm`, but originally computed on the gridded data (i.e. the top left 4 pixels forming pixel 1).
@@ -114,10 +127,22 @@ Performs the forward warping of in input bayer mosaic (`bayer_mosaic`) with the 
 * `tfm`: The transformation, but calculated on the 2x2 binned data.
 * `use_interp`: if `true` linar interpolation will be used on destination.
 * `supersample`: The factor to supersample. The default of 2 means that the output size corresponds to the input size.
-* `bayer_pattern`: The order of the pixels in the bayer pattern. Allowed tags are R,G and B.
+* `bayer_pattern`: The order of the pixels in the bayer pattern. Allowed tags are R,G and B. `nothing` means
+    `bayer_mosaic` is already mono (not a raw mosaic) -- the whole frame is warped as one source, with no
+    Bayer sub-image splitting or 3-channel reconstruction (see [`mono_pixel_transform`](@ref)).
 
 """
 function drizzle_warp!(result, drizzle_mask, bayer_mosaic, inv_tfm; supersample = 2.0, use_interp=false, bayer_pattern = "RGGB")
+    if isnothing(bayer_pattern)
+        # mono (non-Bayer) drizzle: a single supersampled forward-warp of the whole frame into one
+        # channel, instead of the 4-way Bayer sub-image split below. result/drizzle_mask may carry a
+        # trailing singleton color dim (Ncol=1), matching stack_many's always-4D accumulator layout.
+        dst_mat = ndims(result) == 2 ? result : (@view result[:, :, 1])
+        dst_mask_mat = ndims(drizzle_mask) == 2 ? drizzle_mask : (@view drizzle_mask[:, :, 1])
+        tfm_both = mono_pixel_transform(inv_tfm, supersample)
+        forward_warp!(dst_mat, dst_mask_mat, bayer_mosaic, tfm_both; use_interp=use_interp)
+        return result
+    end
     bayer_index = get_bayer_index(bayer_pattern)
     sindex_x = (1, 2, 1, 2)
     sindex_y = (1, 1, 2, 2)
@@ -215,8 +240,8 @@ function do_drizzle_warp!(drizzle_mask, drizzle_supersampling, bayer_pattern, us
         return result
 end
 
-function get_mono(data; use_drizzle, ref_col=(2,1), dim_color = 4)
-    if (use_drizzle)
+function get_mono(data; bayer_pattern, ref_col=(2,1), dim_color = 4)
+    if !isnothing(bayer_pattern)
         return @view data[ref_col[1]:2:end, ref_col[2]:2:end]
     elseif (ndims(data)<3)
          return data
