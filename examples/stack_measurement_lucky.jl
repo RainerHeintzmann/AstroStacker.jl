@@ -84,10 +84,12 @@ function main()
 
         bayer_pattern = "RGGB"
         @time fft_stacked_bayer, all_params_fft_bayer = stack_many_fft(Float32.(data); bayer_pattern=bayer_pattern, drizzle_supersampling=2.0);
-
+        @time fft_stacked_interp, all_params_fft_interp = stack_many_fft(Float32.(data); bayer_pattern=bayer_pattern, debayer_fun=debayer_interp, use_drizzle=false);
+        @vt fft_stacked_bayer fft_stacked_interp
+        
         fft_stacked_mono, all_params_fft_mono = stack_many_fft(single_channel; use_drizzle=false);
-        shifted = AstroStacker.apply_shift(Float32.(single_channel), all_params_fft_mono)
-        @vt single_channel shifted
+        # shifted = AstroStacker.apply_shift(Float32.(single_channel), all_params_fft_mono)
+        # @vt single_channel shifted
         
         plot()
         @time fft_stacked_mono, all_params_fft_mono = stack_many_fft(Float32.(single_channel); drizzle_supersampling=2.0);

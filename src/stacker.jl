@@ -35,12 +35,18 @@ Returns a Tuple of the result image and a list of stacking parameters for each i
         a 3-channel R/G/B result via the drizzle algorithm (mask-tracked scatter-warp, see `src/warp.jl`)
         -- regardless of `drizzle_supersampling`'s value, even at `1` (no extra upsampling), since
         debayering itself requires the scatter-warp's per-Bayer-subpixel handling.
-    + `bayer_pattern` a pattern, `use_drizzle=false`: the whole stack is first debayered up front via the
-        standard (binning) algorithm ([`bin_rgb`](@ref)), then combined exactly like the mono/already-color
+    + `bayer_pattern` a pattern, `use_drizzle=false`: the whole stack is first debayered up front via
+        `debayer_fun` (default [`bin_rgb`](@ref)), then combined exactly like the mono/already-color
         non-drizzle case above, applied independently to each of the 3 resulting channels.
 * `use_drizzle`: selects the accumulation *algorithm* -- the mask-tracked drizzle scatter-warp (`true`,
     the default) vs. a plain single-shot backward-warp (`false`) -- independent of `bayer_pattern` (see
     above); debayering (`bayer_pattern` not `nothing`) works with either.
+* `debayer_fun`: only used when `bayer_pattern` is not `nothing` and `use_drizzle=false` (see above).
+    Defaults to [`bin_rgb`](@ref), which halves resolution via simple 2x2-superpixel binning (and blurs the
+    green channel slightly, since it averages two samples). Pass [`debayer_interp`](@ref) instead for
+    full-resolution (same size as `input_stack`) bilinear demosaicing:
+    `stack_many(data; bayer_pattern="RGGB", use_drizzle=false, debayer_fun=debayer_interp)`. Any function
+    with the signature `debayer_fun(input_stack; bayer_pattern) -> already_color_stack` can be used.
 * `use_interp`: if `true` linar interpolation will be used on destination.
 * `drizzle_supersampling`: only meaningful when `use_drizzle=true`; passing anything other than `1` together
     with `use_drizzle=false` is an error (it would otherwise have no effect and be silently ignored). This
@@ -92,8 +98,8 @@ unchanged). See [`stack_many_fft`](@ref) for a fast, translation-only alternativ
 """
 function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_supersampling = (use_drizzle ? 2.0 : 1.0),
                 min_sigma = 2.0, verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = nothing,
-                to_fast_mem=identity, to_slow_mem=identity, on_checkpoint=nothing, find_transform_fun=find_transform,
-                max_uncovered_frac=0.05, kwargs...)
+                debayer_fun = bin_rgb, to_fast_mem=identity, to_slow_mem=identity, on_checkpoint=nothing,
+                find_transform_fun=find_transform, max_uncovered_frac=0.05, kwargs...)
     # calls on_checkpoint(label) if the caller supplied one -- e.g. `on_checkpoint = label ->
     # println(label, ": ", CUDA.memory_status())` -- to trace where memory (in particular GPU memory) is
     # actually being allocated, without AstroStacker.jl itself depending on any GPU package. A no-op if
@@ -101,11 +107,13 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
     checkpoint(label) = isnothing(on_checkpoint) ? nothing : on_checkpoint(label)
     if !isnothing(bayer_pattern) && !use_drizzle
         # Debayering itself always requires per-frame handling of 3 channels, but doesn't require the
-        # drizzle scatter-warp specifically: debayer the whole stack up front via the standard (binning)
-        # algorithm, then treat the result as ordinary already-color input for the rest of this function
-        # (registration from the mono reference channel, then the same transform applied independently to
-        # each color channel via the plain warp below) -- reuses that existing code path unchanged.
-        input_stack = bin_rgb(input_stack; bayer_pattern)
+        # drizzle scatter-warp specifically: debayer the whole stack up front via `debayer_fun` (default
+        # `bin_rgb`, which halves resolution via simple 2x2-superpixel binning; pass `debayer_interp` for
+        # full-resolution bilinear demosaicing instead), then treat the result as ordinary already-color
+        # input for the rest of this function (registration from the mono reference channel, then the same
+        # transform applied independently to each color channel via the plain warp below) -- reuses that
+        # existing code path unchanged.
+        input_stack = debayer_fun(input_stack; bayer_pattern)
         bayer_pattern = nothing
     end
     if !use_drizzle && drizzle_supersampling != 1

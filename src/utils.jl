@@ -40,6 +40,39 @@ function bin_rgb(data; DT = eltype(data), bayer_pattern = "RGGB")
 end
 
 """
+    debayer_interp(data; DT=eltype(data), bayer_pattern="RGGB")
+
+Debayers a raw Bayer-pattern mosaic stack into a full-resolution (same `(H, W)` as `data`) 3-channel R/G/B
+stack via bilinear interpolation ("bilinear demosaicing"), unlike [`bin_rgb`](@ref) (which halves
+resolution via simple 2x2-superpixel binning). Each channel's sparse, half-resolution samples (from
+`bin_rgb`) are upsampled back to the mosaic's own full resolution via bilinear interpolation.
+
+Useful as `stack_many`'s `debayer_fun` when using `bayer_pattern` together with `use_drizzle=false`, to
+keep the full original resolution instead of `bin_rgb`'s default (halved) one:
+`stack_many(data; bayer_pattern="RGGB", use_drizzle=false, debayer_fun=debayer_interp)`.
+
+# Parameters
+
+* `data`: data to debayer. This can be a single image or a stack.
+* `DT`: result datatype (default is the input datatype)
+* `bayer_pattern`: see [`bin_rgb`](@ref).
+"""
+function debayer_interp(data; DT=eltype(data), bayer_pattern="RGGB")
+    binned = bin_rgb(data; DT=Float64, bayer_pattern) # (H÷2, W÷2, size(data)[3:end]..., 3)
+    H, W = size(data, 1), size(data, 2)
+    Hh, Wh = size(binned, 1), size(binned, 2)
+    Ncol = size(binned, ndims(binned))
+    res = similar(data, DT, (H, W, size(data)[3:end]..., Ncol))
+    xs = range(1, Hh, length=H)
+    ys = range(1, Wh, length=W)
+    for c in 1:Ncol, f in CartesianIndices(size(binned)[3:end-1])
+        itp = extrapolate(interpolate(binned[:, :, f, c], BSpline(Linear())), Line())
+        res[:, :, f, c] .= [itp(x, y) for x in xs, y in ys]
+    end
+    return res
+end
+
+"""
     weighted_std(data, weights; dims=4)
 
 Calculates the standard deviation allowing for (binary) weights indicating which pixels are considered.

@@ -11,7 +11,7 @@ using KernelAbstractions # for backend-portable (CPU/GPU) drizzle warp kernels
 
 export correct_dark_flat, stack_many, stack_many_lucky, stack_many_fft
 export com_psf, collect_info
-export bin_mono, bin_rgb
+export bin_mono, bin_rgb, debayer_interp
 export laplacian_variance, patch_quality_grid, quality_weight_map
 
 include("utils.jl")

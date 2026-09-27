@@ -95,6 +95,31 @@ end
     @test result_direct == result_manual
 end
 
+@testset "stack_many debayer_fun=debayer_interp keeps full resolution" begin
+    sz = (100, 100)
+    N = 60
+    star_pos = sz .* rand(2, N)
+    star_amp = rand(N)
+    star_shape = 0.3 .+ rand(2, N)
+    Nframes = 5
+    frames = cat((gaussian(sz, offset=star_pos .+ 3 .* (rand(2, N) .- 0.5), weight=star_amp, sigma=star_shape) for _ in 1:Nframes)..., dims=3)
+
+    result, _ = stack_many(frames; ref_slice=1, f=com_psf, use_drizzle=false, bayer_pattern="RGGB",
+                            debayer_fun=debayer_interp, verbose=false, box_size=(15,15))
+    # unlike the default debayer_fun=bin_rgb (which halves resolution), debayer_interp keeps the full
+    # original (H, W) resolution.
+    @test size(result) == (sz[1], sz[2], 1, 3)
+
+    # cross-check equivalence with calling debayer_interp + stack_many(...; use_drizzle=false) manually.
+    debayered = debayer_interp(frames; bayer_pattern="RGGB")
+    Random.seed!(88)
+    result_direct, _ = stack_many(frames; ref_slice=1, f=com_psf, use_drizzle=false, bayer_pattern="RGGB",
+                                   debayer_fun=debayer_interp, verbose=false, box_size=(15,15))
+    Random.seed!(88)
+    result_manual, _ = stack_many(debayered; ref_slice=1, f=com_psf, use_drizzle=false, verbose=false, box_size=(15,15))
+    @test result_direct == result_manual
+end
+
 @testset "stack_many errors on drizzle_supersampling != 1 with use_drizzle=false" begin
     sz = (60, 60)
     N = 30
