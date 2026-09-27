@@ -5,7 +5,7 @@ using Statistics
 
 Random.seed!(3)
 
-@testset "test_stack_many_fft" begin
+@testset "stack_many_fft (mono, no drizzle) recovers a known translation" begin
     sz = (80, 80)
     N_blobs = 60
     positions = sz .* rand(2, N_blobs)
@@ -15,21 +15,45 @@ Random.seed!(3)
 
     # simple global (integer-pixel) per-frame jitter, plus a little noise -- exactly what
     # stack_many_fft's translation-only FFT registration is meant to correct.
-    Nframes = 8
-    frames = Vector{Matrix{Float64}}(undef, Nframes)
-    for n in 1:Nframes
-        frames[n] = circshift(ground_truth, (rand(-3:3), rand(-3:3))) .+ 0.01 .* randn(sz...)
-    end
+    Nframes = 6
+    frames = [circshift(ground_truth, (rand(-3:3), rand(-3:3))) .+ 0.01 .* randn(sz...) for _ in 1:Nframes]
     input_stack = cat(frames...; dims=3)
 
-    out = stack_many_fft(input_stack; verbose=false)
-    @test size(out.result) == sz
-    @test size(out.aligned) == size(input_stack)
-    @test length(out.shifts) == Nframes
+    result, all_params = stack_many_fft(input_stack; ref_slice=1, use_drizzle=false, verbose=false)
+    @test length(all_params) == Nframes
+    result_2d = dropdims(result, dims=(3, 4))
+    @test size(result_2d) == sz
 
     rms(a, b) = sqrt(mean(abs2.(a .- b)))
     raw_mean = dropdims(mean(input_stack, dims=3), dims=3)
 
     # registration should clearly beat a naive average of the un-registered, jittered frames
-    @test rms(out.result, ground_truth) < rms(raw_mean, ground_truth)
+    @test rms(result_2d, ground_truth) < rms(raw_mean, ground_truth)
+end
+
+@testset "stack_many_fft (Bayer/drizzle path) runs via fft_find_transform" begin
+    # stack_many_fft's default (use_drizzle=true, matching stack_many's own default) treats input_stack as
+    # a Bayer-pattern mosaic and runs the same drizzle pipeline as stack_many, just with translation-only
+    # FFT registration instead of star detection + RANSAC. There's no numerically-meaningful "ground truth
+    # RGB scene" comparison without a true Bayer-consistent fixture, so this checks that the pipeline
+    # (registration -> drizzle warp -> outlier rejection) runs correctly end-to-end and produces the
+    # expected shape, for both supported shift estimators.
+    sz = (64, 64)
+    N_blobs = 40
+    positions = sz .* rand(2, N_blobs)
+    amps = 0.5 .+ rand(N_blobs)
+    sigmas = 1.5 .+ 1.5 .* rand(2, N_blobs)
+    ground_truth = gaussian(sz, offset=positions, weight=amps, sigma=sigmas)
+
+    Nframes = 5
+    frames = [circshift(ground_truth, (rand(-2:2), rand(-2:2))) .+ 0.01 .* randn(sz...) for _ in 1:Nframes]
+    input_stack = cat(frames...; dims=3)
+
+    result, all_params = stack_many_fft(input_stack; ref_slice=1, verbose=false)
+    @test length(all_params) == Nframes
+    @test size(result) == (sz..., 1, 3)
+
+    result_lk, all_params_lk = stack_many_fft(input_stack; ref_slice=1, verbose=false, shift_fun=AstroStacker.FindShift.find_shift_lk)
+    @test length(all_params_lk) == Nframes
+    @test size(result_lk) == (sz..., 1, 3)
 end

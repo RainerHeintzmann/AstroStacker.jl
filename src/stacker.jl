@@ -49,10 +49,18 @@ itself, as in the old/simpler usage pattern, or if you just want to stay on the 
 `on_checkpoint`, if given, is called with a short descriptive label (e.g. `"after frame 3"`) at several
 points during stacking, so you can trace where memory is actually being allocated -- e.g.
 `on_checkpoint = label -> println(label, ": ", CUDA.memory_status())`.
+
+# Pluggable registration
+`find_transform_fun` (default `Astroalign.find_transform`) determines each frame's transform. It is called
+as `find_transform_fun(src_mono, ref_mono; kwargs...)` (the same Bayer-subsampled, CPU-materialized mono
+images `Astroalign.find_transform` itself receives) and must return `(tfm, params)` with `params.phot_to`
+set to whatever should be used as the reference for the next frame (for `Astroalign.find_transform` this
+is a reusable photometry table; a custom estimator that has no such table can simply set it to `ref_mono`
+unchanged). See [`stack_many_fft`](@ref) for a fast, translation-only alternative built this way.
 """
 function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_supersampling = 2.0, min_sigma = 2.0,
                 verbose = true, ref_slice = size(input_stack,3)÷2 + 1, ref_col=(2,1), bayer_pattern = "RGGB",
-                to_fast_mem=identity, to_slow_mem=identity, on_checkpoint=nothing, kwargs...)
+                to_fast_mem=identity, to_slow_mem=identity, on_checkpoint=nothing, find_transform_fun=find_transform, kwargs...)
     # calls on_checkpoint(label) if the caller supplied one -- e.g. `on_checkpoint = label ->
     # println(label, ": ", CUDA.memory_status())` -- to trace where memory (in particular GPU memory) is
     # actually being allocated, without AstroStacker.jl itself depending on any GPU package. A no-op if
@@ -133,7 +141,7 @@ function stack_many(input_stack; use_drizzle=true, use_interp=false, drizzle_sup
                                                                          slow_src_buf, slow_result_buf, slow_mask_buf)
         end
 
-        tfm, params = find_transform(src_mono, myref_mono; kwargs...)
+        tfm, params = find_transform_fun(src_mono, myref_mono; kwargs...)
         myref_mono = params.phot_to # to speed up further rounds, sinc find_transform then ignores the photometry
 
         if (ndims(src) < 3)

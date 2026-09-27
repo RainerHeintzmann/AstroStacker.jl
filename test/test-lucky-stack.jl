@@ -3,6 +3,7 @@ using Random # to seed the random generator for reproducibility
 using AstroStacker
 using Statistics
 using Interpolations # for the synthetic local warp used to build test frames
+using OffsetArrays # to check stack_many_lucky handles OffsetArray-wrapped input (e.g. from AstroImages)
 
 Random.seed!(7)
 
@@ -102,4 +103,24 @@ end
     naive_err = rms(naive_mean, ground_truth)
 
     @test lucky_err < naive_err
+end
+
+@testset "stack_many_lucky handles OffsetArray-wrapped input" begin
+    # AstroImages-loaded FITS data (and similar loaders) commonly comes back as an OffsetArray. A slice
+    # of it, broadcast over, stays an OffsetArray too -- which then propagates into
+    # FindShift.align_images/FourierTools' FFT-based filtering, where it isn't supported (FFTW's `mul!`
+    # has no method for a non-standard-indexed destination). Regression test for that class of bug.
+    sz = (48, 48)
+    N_blobs = 40
+    positions = sz .* rand(2, N_blobs)
+    amps = 0.5 .+ rand(N_blobs)
+    sigmas = 1.5 .+ 1.5 .* rand(2, N_blobs)
+    ground_truth = gaussian(sz, offset=positions, weight=amps, sigma=sigmas)
+
+    Nframes = 4
+    frames = [ground_truth .+ 0.01 .* randn(sz...) for _ in 1:Nframes]
+    input_stack = OffsetArray(cat(frames...; dims=3), 0:sz[1]-1, 0:sz[2]-1, 1:Nframes)
+
+    out = stack_many_lucky(input_stack; grid_size=(4, 4), verbose=false)
+    @test size(out.result) == sz
 end

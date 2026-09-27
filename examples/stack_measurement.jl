@@ -86,6 +86,24 @@ function main()
                 # Pattern matching for M101 galaxy exposures (60s, date 2026-03-23)
                 # files = raw"M 35_15s60_Astro_20260215-*_16C.fits"
                 files = raw"M 101_60s60_Astro_20260323-*_14C.fits"
+        if (false)
+                folder = raw"C:\NoBackup\dwarf\Astronomy\DWARF_RAW_TELE_Moon_EXP_0.004_GAIN_10_2026-09-26-19-28-35-816\\"
+                
+                # Separate calibration folders organized by type
+                darkfolder = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\dark\cam_0\\"
+                flatfolder = raw"C:\NoBackup\dwarf\Astronomy\CALI_FRAME\flat\cam_0\\"
+                
+                # Master dark for 60 second exposures at 12C
+                file_dark15 = raw"dark_exp_60.000000_gain_60_bin_1_14C_stack_10.fits"
+                # file_dark15 = raw"dark_exp_15.000000_gain_60_bin_1_12C_stack_9.fits"
+                
+                # Flat field calibration
+                file_flat = raw"flat_gain_2_bin_1_ir_0.fits"
+                
+                # Pattern matching for M101 galaxy exposures (60s, date 2026-03-23)
+                # files = raw"M 35_15s60_Astro_20260215-*_16C.fits"
+                files = raw"Moon_0.004s10_VIS_20260926-*_33C.fits"
+        end
         end
 
 
@@ -164,6 +182,10 @@ function main()
                 @time stacked_d, all_params_d = stack_many(data; use_interp=use_interp, use_drizzle=true, f=f, N_max=N_max,
                         box_size=box_size, ap_radius=ap_radius, min_sigma = 2.5, nsigma = 1, min_fwhm = min_fwhm, bayer_pattern = bayer_pattern, drizzle_supersampling = 2.0);
                 # 9.8 sec
+
+        if (false)
+                result, aligned, warps, quality = stack_many_lucky(data; grid_size=(10,10), quality_power=2.0, verbose=true)
+        end
         end
 
 

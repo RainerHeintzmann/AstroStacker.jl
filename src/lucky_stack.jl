@@ -31,7 +31,13 @@ function stack_many_lucky(input_stack::AbstractArray{T,3}; ref_slice=size(input_
     shift_fun=FindShift.find_shift_iter, quality_power=2.0, verbose=true, align_kwargs...) where {T}
     Nimgs = size(input_stack, 3)
     order = [ref_slice, (n for n in 1:Nimgs if n != ref_slice)...]
-    frames = [Float64.(input_stack[:, :, n]) for n in order]
+    # Broadcasting over an OffsetArray slice (e.g. from AstroImages-loaded FITS data) preserves the
+    # offset-array wrapping (only the element type changes), which then propagates into
+    # FindShift.align_images/FourierTools' FFT-based filtering -- where it breaks, since FFTW's `mul!`
+    # has no specialized method for a non-standard-indexed destination. `collect` strips the wrapper,
+    # giving a plain, standard 1-based Array (unlike `Array(x)`/`Array{T}(x)`, which for a genuinely
+    # offset-indexed `x` throw a DimensionMismatch instead of re-indexing).
+    frames = [Float64.(collect(input_stack[:, :, n])) for n in order]
 
     aligned, warps = FindShift.align_images(frames; grid_size=grid_size, shift_fun=shift_fun, align_kwargs...)
 

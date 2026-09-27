@@ -1,42 +1,52 @@
 """
-    stack_many_fft(input_stack; ref_slice=nothing, min_sigma=2.0, verbose=true, align_kwargs...)
+    fft_find_transform(src_mono, ref_mono; shift_fun=FindShift.find_shift_iter, kwargs...)
 
-Stacks a series of mono 2D frames (`input_stack`, with individual frames stacked along the 3rd
-dimension) using fast, translation-only FFT-correlation registration (`FindShift.align_stack`),
-rather than the full patch-wise thin-plate-spline non-rigid registration used by
-[`stack_many_lucky`](@ref).
+An `Astroalign.find_transform`-compatible transform estimator based on fast, translation-only FFT
+cross-correlation ([`FindShift.find_shift_iter`](@ref)/[`FindShift.find_shift_lk`](@ref)) instead of star
+detection + RANSAC. This is what [`stack_many_fft`](@ref) passes as `find_transform_fun` to
+[`stack_many`](@ref), so the whole existing pipeline (Bayer/drizzle handling, GPU tiering, buffer reuse,
+outlier rejection) is reused unchanged -- only the per-frame registration step itself differs.
 
-This is a much cheaper option than [`stack_many_lucky`](@ref), suitable when frames only jitter
-(no rotation/scale, no spatially-varying local distortion) -- e.g. for a quick preview, or to build a
-more stable reference frame for [`stack_many_lucky`](@ref) than a single raw input frame.
+Since there is no reusable photometry table here (unlike `Astroalign.find_transform`'s `phot_to`), the
+returned `params.phot_to` is just `ref_mono` itself, unchanged -- i.e. every frame is registered against
+the same fixed reference, which is exactly what's wanted for a pure-translation estimator.
+
+Any other keyword arguments (e.g. Astroalign-specific ones like `box_size`/`ap_radius`/`f`/`min_fwhm`/`N_max`
+that `stack_many`'s `kwargs...` may still be carrying over from a copy-pasted call) are accepted and ignored,
+so the same call site works whichever `find_transform_fun` is plugged in.
+"""
+function fft_find_transform(src_mono, ref_mono; shift_fun=FindShift.find_shift_iter, kwargs...)
+    Δx = shift_fun(ref_mono, src_mono)
+    tfm = AffineMap(SMatrix{2,2}(1.0, 0.0, 0.0, 1.0), SVector(Δx[1], Δx[2]))
+    return tfm, (phot_to=ref_mono,)
+end
+
+"""
+    stack_many_fft(input_stack; shift_fun=FindShift.find_shift_iter, kwargs...)
+
+Stacks a series of frames using fast, translation-only FFT-correlation registration
+([`fft_find_transform`](@ref)) in place of `Astroalign.find_transform`'s star-detection + RANSAC rigid/
+similarity fit -- otherwise identical to, and sharing the full implementation of, [`stack_many`](@ref):
+the same Bayer/drizzle handling, GPU fast/slow-memory tiering (`to_fast_mem`/`to_slow_mem`), buffer reuse,
+sigma-clip outlier rejection, and `on_checkpoint` instrumentation all apply unchanged. See
+[`stack_many`](@ref)'s docstring for the full list of supported keyword arguments.
+
+This is much cheaper than star-based registration (no source detection/RANSAC), and works on frames with
+no discrete point sources at all (e.g. the Moon/planets) -- but it only fits a pure per-frame translation,
+no rotation. Good for a quick preview, for frames that only jitter, or to build a more stable reference
+frame for [`stack_many_lucky`](@ref) than a single raw input frame.
 
 # Arguments
-+ `input_stack`: input frames stacked along the 3rd dimension (mono, i.e. `(x,y,frame)`).
-+ `ref_slice`: index of the reference frame to align to (default: the middle frame, see `FindShift.align_stack`'s `refno`).
-+ `min_sigma`: minimum number of standard deviations a pixel needs to be away from the mean of that
-    pixel to be excluded as an outlier (sigma-clipping, as in [`stack_many`](@ref)). Set to `0` to
-    disable outlier rejection (plain mean).
-+ `verbose`: print per-frame shift information if `true`.
-+ `align_kwargs`: further keyword arguments forwarded to `FindShift.align_stack` (e.g. `damp`, `max_freq`, `method`).
++ `input_stack`: input frames stacked along the 3rd dimension, as in [`stack_many`](@ref) (a Bayer-pattern
+    mosaic by default -- see `use_drizzle`/`bayer_pattern` there).
++ `shift_fun`: the per-frame shift estimator used by [`fft_find_transform`](@ref) -- `FindShift.find_shift_iter`
+    (FFT/Optim-based, default) or `FindShift.find_shift_lk` (Lucas-Kanade based alternative).
++ `kwargs...`: forwarded to [`stack_many`](@ref) (e.g. `use_drizzle`, `bayer_pattern`, `drizzle_supersampling`,
+    `min_sigma`, `to_fast_mem`, `to_slow_mem`, `on_checkpoint`, `ref_slice`, `verbose`).
 
-Returns a `NamedTuple` of `(result, aligned, shifts)`.
+Returns the same `(result, all_params)` as [`stack_many`](@ref).
 """
-function stack_many_fft(input_stack::AbstractArray{T,3}; ref_slice=nothing, min_sigma=2.0, verbose=true, align_kwargs...) where {T}
-    aligned, shifts = FindShift.align_stack(input_stack; refno=ref_slice, align_kwargs...)
-
-    if verbose
-        for (n, s) in enumerate(shifts)
-            println("stacking (fft): frame $n, shift: $(round.(s[1:2]; sigdigits=4))")
-        end
-    end
-
-    result = let
-        if min_sigma > 0
-            remove_outliers(aligned; verbose=verbose, stack_dim=3, min_sigma=min_sigma)
-        else
-            sum(aligned; dims=3) ./ size(aligned, 3)
-        end
-    end
-
-    return (result=dropdims(result, dims=3), aligned=aligned, shifts=shifts)
+function stack_many_fft(input_stack; shift_fun=FindShift.find_shift_iter, kwargs...)
+    find_transform_fun(src_mono, ref_mono; kw...) = fft_find_transform(src_mono, ref_mono; shift_fun, kw...)
+    return stack_many(input_stack; find_transform_fun, kwargs...)
 end
